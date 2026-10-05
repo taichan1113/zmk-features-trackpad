@@ -1,4 +1,4 @@
-# Travelers Pad input functions / Travelers Pad機能群
+# zmk-features-trackpad / トラックパッド機能群
 
 Standalone ZMK/Zephyr module extracted from Travelers Pad at `b0ad83d`.
 Recognizer, arbiter, broker and observer implementation is unchanged.

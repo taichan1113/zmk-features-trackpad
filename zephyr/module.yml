@@ -1,4 +1,4 @@
-name: travelers_pad_functions
+name: zmk-features-trackpad
 build:
   cmake: .
   kconfig: Kconfig
