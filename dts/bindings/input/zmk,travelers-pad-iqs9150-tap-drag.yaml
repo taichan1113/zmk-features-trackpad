@@ -1,0 +1,38 @@
+description: Travelers Pad IQS9150 one-to-three-finger tap and double-tap drag function
+
+compatible: "zmk,travelers-pad-iqs9150-tap-drag"
+
+include: base.yaml
+
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: IQS9150 raw contact input device
+  tap-max-ms:
+    type: int
+    default: 180
+    description: Maximum duration of either tap in milliseconds
+  tap-max-move:
+    type: int
+    default: 75
+    description: Maximum primary-contact movement during a tap
+  multifinger-settle-ms:
+    type: int
+    default: 45
+    description: >
+      Ignore contact-coordinate settling for this interval after a second or
+      third finger appears. 2本目または3本目の検出直後に、接触座標の安定化を
+      タップ移動として判定しない時間（ms）。
+  double-tap-max-gap-ms:
+    type: int
+    default: 250
+    description: Maximum all-fingers-up interval between the two taps
+  double-tap-max-distance:
+    type: int
+    default: 120
+    description: Maximum start-position difference between two taps
+  drag-start-move:
+    type: int
+    default: 20
+    description: One-finger second-tap movement needed to start dragging immediately

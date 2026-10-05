@@ -1,0 +1,9 @@
+description: Travelers Pad two-finger Tip-Tap virtual KSCAN
+compatible: "zmk,travelers-pad-iqs9150-tip-tap-kscan"
+include: base.yaml
+properties:
+  input-device: {type: phandle, required: true}
+  second-contact-timeout-ms: {type: int, default: 180}
+  contact-slop: {type: int, default: 75}
+  minimum-horizontal-separation: {type: int, default: 160}
+  direction-inverted: {type: boolean}

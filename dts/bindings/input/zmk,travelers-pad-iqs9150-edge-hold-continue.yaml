@@ -1,0 +1,59 @@
+description: Travelers Pad IQS9150 edge-hold continuation function
+
+compatible: "zmk,travelers-pad-iqs9150-edge-hold-continue"
+
+include: base.yaml
+
+properties:
+  drag-input-device:
+    type: phandle
+    required: true
+    description: Raw IQS9150 contact stream used while a confirmed drag is active
+  scroll-input-device:
+    type: phandle
+    required: true
+    description: Router output stream used only after two-finger scroll is committed
+  scroll-motion-input-device:
+    type: phandle
+    required: true
+    description: Canonical wheel stream emitted by the pointer function after its axis lock
+  scroll-output-device:
+    type: phandle
+    required: true
+    description: Pointer function device used to re-enter its normal wheel listener chain
+  surface-x:
+    type: int
+    default: 2000
+    description: Usable pad width in IQS9150 absolute coordinates
+  surface-y:
+    type: int
+    default: 1213
+    description: Usable pad height in IQS9150 absolute coordinates
+  edge-size:
+    type: int
+    default: 80
+    description: Width of the physical boundary zone that arms continuation detection
+  drag-start-delay-ms:
+    type: int
+    default: 120
+    description: Hold time at an edge before virtual drag motion begins
+  drag-repeat-ms:
+    type: int
+    default: 24
+    description: Period of virtual drag motion while an edge remains held
+  drag-repeat-delta:
+    type: int
+    default: 8
+    description: Relative-coordinate delta emitted on each virtual drag-motion period
+  scroll-start-delay-ms:
+    type: int
+    default: 120
+    description: Hold time at an edge before virtual scroll begins
+  scroll-repeat-ms:
+    type: int
+    default: 24
+    description: Period of virtual scroll while an edge remains held
+  scroll-repeat-delta:
+    type: int
+    default: 4
+    description: Relative wheel delta emitted on each virtual scroll period

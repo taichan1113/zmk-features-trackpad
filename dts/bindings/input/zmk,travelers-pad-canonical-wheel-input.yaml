@@ -1,0 +1,6 @@
+description: |
+  Private pre-processor canonical wheel observation device. No host listener
+  or input processors may be attached; it is not a mouse output endpoint.
+  processor前の標準wheelを観測する専用device。HID listenerやprocessorを接続しない。
+compatible: "zmk,travelers-pad-canonical-wheel-input"
+include: base.yaml

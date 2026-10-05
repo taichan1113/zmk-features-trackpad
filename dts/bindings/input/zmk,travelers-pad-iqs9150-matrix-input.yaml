@@ -1,0 +1,18 @@
+description: Travelers Pad IQS9150 active-touch input isolation function
+
+compatible: "zmk,travelers-pad-iqs9150-matrix-input"
+
+include: base.yaml
+
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: Raw IQS9150 contact input device
+
+  one-finger-settle-ms:
+    type: int
+    default: 45
+    description: >
+      Confirmation interval before forwarding one-finger contact to the grid.
+      多指接触の開始を格子接触と誤認しないための1本指接触確定時間（ms）。

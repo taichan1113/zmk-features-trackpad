@@ -1,0 +1,6 @@
+name: travelers_pad_functions
+build:
+  cmake: .
+  kconfig: Kconfig
+  settings:
+    dts_root: .

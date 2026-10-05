@@ -1,0 +1,31 @@
+description: Travelers Pad IQS9150 exclusive multi-finger gesture router
+
+compatible: "zmk,travelers-pad-iqs9150-multifinger-router"
+
+include: base.yaml
+
+properties:
+  transform-device:
+    type: phandle
+    description: |
+      Optional transform recognizer configuration. Geometry exclusion follows
+      its pinch-disabled/rotation-disabled properties, node status and CONFIG.
+      When omitted, preserve legacy exclusion of both geometry types.
+      任意のtransform設定参照。個別無効化・ノード状態・CONFIGに識別抑止を合わせる。
+      省略時は従来どおり両ジオメトリを除外する。
+  input-device:
+    type: phandle
+    required: true
+    description: Raw IQS9150 contact input device
+  scroll-classify-move:
+    type: int
+    default: 35
+    description: Minimum movement required from each direction-coherent contact before committing two-finger scroll
+  geometry-distance-threshold:
+    type: int
+    default: 30000
+    description: Squared-distance change that claims pinch geometry
+  geometry-rotation-threshold:
+    type: int
+    default: 30000
+    description: Cross-product magnitude that claims rotation geometry

@@ -1,0 +1,143 @@
+menu "Travelers Pad input functions"
+
+config TRAVELERS_PAD_IQS9150_POINTER
+    bool "IQS9150 pointer and scroll function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_POINTER_ENABLED
+    select INPUT
+    help
+      Convert normalized IQS9150 contact frames into relative pointer motion,
+      two-finger scrolling. Tap and drag policy is implemented by a separate
+      function module. This is intentionally
+      separate from the sensor driver.
+
+config TRAVELERS_PAD_IQS9150_FUNCTION_INIT_PRIORITY
+    int "IQS9150 function module initialization priority"
+    default 51
+    depends on TRAVELERS_PAD_IQS9150_CONTACT_SESSION || TRAVELERS_PAD_IQS9150_POINTER || TRAVELERS_PAD_IQS9150_GRID_KSCAN || TRAVELERS_PAD_IQS9150_EDGE_DIAL_KSCAN || TRAVELERS_PAD_IQS9150_EDGE_HOLD_CONTINUE || TRAVELERS_PAD_IQS9150_SCROLL_INERTIA || TRAVELERS_PAD_IQS9150_MULTIFINGER_ROUTER || TRAVELERS_PAD_IQS9150_TAP_DRAG || TRAVELERS_PAD_IQS9150_MULTIFINGER_GESTURE_KSCAN || TRAVELERS_PAD_IQS9150_TIP_TAP || TRAVELERS_PAD_IQS9150_TRANSFORM_GESTURE || TRAVELERS_PAD_IQS9150_MATRIX_INPUT
+    help
+      Must be later than the IQS9150 sensor driver's device priority (50).
+
+config TRAVELERS_PAD_IQS9150_GRID_KSCAN
+    bool "IQS9150 grid and edge gesture KSCAN function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_GRID_KSCAN_ENABLED
+    select KSCAN
+    help
+      Convert short one-finger taps into configurable grid cells or edge actions.
+
+config TRAVELERS_PAD_IQS9150_EDGE_DIAL_KSCAN
+    bool "Travelers Pad IQS9150 edge dial KSCAN"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_EDGE_DIAL_KSCAN_ENABLED
+    select KSCAN
+    help
+      Convert motion along enabled pad edges into repeated virtual KSCAN events.
+
+config TRAVELERS_PAD_IQS9150_EDGE_HOLD_CONTINUE
+    bool "Travelers Pad IQS9150 edge-hold continuation function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && TRAVELERS_PAD_IQS9150_MULTIFINGER_ROUTER && TRAVELERS_PAD_IQS9150_POINTER && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_EDGE_HOLD_CONTINUE_ENABLED
+    select INPUT
+    help
+      Continue a confirmed drag or axis-locked two-finger scroll beyond a
+      physical pad edge. Delayed output is delegated by the contact-arbiter
+      token and stops on release, cancellation, or a new physical contact.
+
+      確定したドラッグまたは軸ロック済み2本指スクロールをパッド端の先へ継続する。
+      遅延出力はcontact-arbiter tokenから委譲され、解放、取消し、新規接触で停止する。
+
+config TRAVELERS_PAD_IQS9150_SCROLL_INERTIA
+    bool "Travelers Pad two-finger scroll inertia"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && TRAVELERS_PAD_IQS9150_MULTIFINGER_ROUTER && TRAVELERS_PAD_IQS9150_POINTER && DT_HAS_ZMK_TRAVELERS_PAD_SCROLL_INERTIA_ENABLED
+    select INPUT
+    help
+      After a router-committed two-finger scroll is released, emit a decaying
+      canonical wheel continuation through the normal pointer listener chain.
+
+config TRAVELERS_PAD_IQS9150_CONTACT_SESSION
+    bool "Travelers Pad contact session manager"
+    default y
+    depends on IQS9150_EV02_DRIVER && DT_HAS_ZMK_TRAVELERS_PAD_CONTACT_SESSION_MANAGER_ENABLED
+    select INPUT
+    help
+      Establishes normalized contact session IDs, cancel boundaries, and the
+      proposal/resolver/token core. The contact arbiter is the sole ownership
+      authority; primary output is token-gated and observer output is
+      explicitly delegated by a live token.
+
+      正規化接触session ID、取消し境界、proposal/resolver/token基盤を提供する。
+      contact arbiterが唯一の所有権authorityであり、primary出力はtokenでgateし、
+      observer出力はlive tokenから明示的に委譲する。
+
+config TRAVELERS_PAD_IQS9150_TIP_TAP
+    bool "Travelers Pad two-finger Tip-Tap"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_TIP_TAP_KSCAN_ENABLED
+    select INPUT
+    select KSCAN
+
+config TRAVELERS_PAD_IQS9150_TRANSFORM_GESTURE
+    bool "Travelers Pad two-finger transform gesture"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_TRANSFORM_GESTURE_ENABLED
+    select INPUT
+    select KSCAN
+    help
+      Own two-finger pinch, rotation, and combined transform geometry before
+      the router may commit a two-finger scroll. This module provides primary
+      arbitration and emits configurable virtual KSCAN actions for pinch-in,
+      pinch-out, counter-clockwise rotation, and clockwise rotation.
+
+config TRAVELERS_PAD_IQS9150_MULTIFINGER_ROUTER
+    bool "IQS9150 exclusive multi-finger gesture router"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && TRAVELERS_PAD_IQS9150_POINTER && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_MULTIFINGER_ROUTER_ENABLED
+    select INPUT
+    help
+      Classify raw IQS9150 sessions before pointer processing. One-finger
+      sessions pass through immediately. Two-finger parallel motion becomes
+      scrolling; pinch/rotation and three-or-more-finger sessions are kept
+      out of the pointer path for future gesture bindings.
+
+config TRAVELERS_PAD_IQS9150_TAP_DRAG
+    bool "IQS9150 multi-finger tap and double-tap drag function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_TAP_DRAG_ENABLED
+    select INPUT
+    help
+      Convert one-, two-, and three-finger taps into left, right, and middle
+      clicks. A nearby second tap with the same finger count becomes a drag
+      when held. This function receives session-republished frames and uses
+      the contact arbiter for exclusive ownership.
+
+      同本数で近い位置の2回目タップをホールドするとドラッグへ移行する。sessionが
+      再配信したframeを受け、排他所有権はcontact arbiterだけを使用する。
+
+config TRAVELERS_PAD_IQS9150_MULTIFINGER_GESTURE_KSCAN
+    bool "IQS9150 three-to-five-finger swipe KSCAN function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_MULTIFINGER_GESTURE_KSCAN_ENABLED
+    select KSCAN
+    help
+      Convert completed three- and four-finger swipes into virtual KSCAN
+      positions. Five-finger contact is analysed as independent-coordinate
+      Grasp/Release geometry. Normal ZMK keymap bindings select the resulting
+      actions.
+
+      3本・4本指スワイプを仮想KSCAN位置へ変換する。5本指接触は独立座標の
+      Grasp/Releaseジオメトリとして解析し、通常のZMK keymapで動作を割り当てる。
+
+config TRAVELERS_PAD_IQS9150_MATRIX_INPUT
+    bool "IQS9150 grid input isolation function"
+    default y
+    depends on IQS9150_EV02_DRIVER && TRAVELERS_PAD_IQS9150_CONTACT_SESSION && DT_HAS_ZMK_TRAVELERS_PAD_IQS9150_MATRIX_INPUT_ENABLED
+    select INPUT
+    help
+      Copy only active one-or-more-finger absolute X/Y and BTN_TOUCH frames to
+      the optional grid input processor. This isolates the grid listener from
+      the raw device and avoids idle-frame processing or event suppression
+      affecting pointer, tap-drag, and multi-finger modules.
+
+endmenu

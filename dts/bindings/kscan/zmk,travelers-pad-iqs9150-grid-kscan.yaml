@@ -1,0 +1,37 @@
+description: Travelers Pad IQS9150 grid and edge gesture virtual KSCAN
+
+compatible: "zmk,travelers-pad-iqs9150-grid-kscan"
+
+include: [kscan.yaml, base.yaml]
+
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: IQS9150 raw contact input device
+  rows:
+    type: int
+    required: true
+  columns:
+    type: int
+    required: true
+  surface-x:
+    type: int
+    default: 2000
+  surface-y:
+    type: int
+    default: 1213
+  edge-size:
+    type: int
+    default: 0
+    description: Width of enabled edge zones in sensor coordinate units
+  edge-keys:
+    type: array
+    required: false
+    description: Eight cells, left/right/top/bottom as row,column pairs
+  tap-max-ms:
+    type: int
+    default: 350
+  tap-max-move:
+    type: int
+    default: 75

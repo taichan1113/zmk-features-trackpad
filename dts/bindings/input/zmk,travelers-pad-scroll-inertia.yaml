@@ -1,0 +1,71 @@
+description: Travelers Pad two-finger scroll inertia function
+
+compatible: "zmk,travelers-pad-scroll-inertia"
+
+include: base.yaml
+
+properties:
+  half-life-ms:
+    type: int
+    default: 0
+    description: |
+      Velocity half-life in ms. Nonzero selects time-based fixed-point inertia;
+      zero preserves legacy per-report integer decay.
+      速度の半減時間。非ゼロは時間基準の固定小数点慣性、0は従来の整数減衰。
+  velocity-window-ms:
+    type: int
+    default: 80
+    description: Velocity smoothing window for time-based mode / 時間基準モードの速度平滑化時間
+  release-timeout-ms:
+    type: int
+    default: 120
+    description: Maximum age of the last physical wheel motion at release / 解放時に許容する最終移動の古さ
+  max-duration-ms:
+    type: int
+    default: 3000
+    description: Safety duration limit for time-based inertia / 時間基準慣性の最大継続時間
+  stop-speed:
+    type: int
+    default: 20
+    description: Stop below this raw sensor-counts/second velocity in time-based mode / 時間基準モードの停止速度（生センサーcount毎秒）
+  contact-input-device:
+    type: phandle
+    required: true
+    description: Raw IQS9150 stream used to identify physical contact release
+  wheel-input-device:
+    type: phandle
+    required: true
+    description: |
+      Private zmk,travelers-pad-canonical-wheel-input device, without a host
+      listener or processors. Must differ from wheel-output-device. The broker
+      copies raw values from wheel-output-device to this source before scaling.
+      専用wheel観測device。出力deviceと分離しHID listener・processorを接続しない。
+      brokerが出力deviceの倍率適用前の値をこの観測sourceへ複製する。
+  wheel-output-device:
+    type: phandle
+    required: true
+    description: Pointer device used to re-enter the normal wheel listener chain
+  start-delay-ms:
+    type: int
+    default: 20
+    description: Delay after two-finger release before inertia begins
+  repeat-ms:
+    type: int
+    default: 24
+    description: Period between inertia wheel reports
+  decay-numerator:
+    type: int
+    default: 3
+    description: Numerator of per-report velocity decay
+  decay-denominator:
+    type: int
+    default: 4
+    description: Denominator of per-report velocity decay
+  stop-delta:
+    type: int
+    default: 2
+    description: Absolute raw wheel delta below which inertia stops
+  max-delta:
+    type: int
+    default: 64
+    description: Maximum absolute raw wheel delta accepted from one physical report

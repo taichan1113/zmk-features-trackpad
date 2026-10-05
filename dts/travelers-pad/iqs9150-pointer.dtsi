@@ -1,0 +1,127 @@
+/* Board-independent pointer profile / 基板非依存のポインタprofile
+ * Define an enabled sensor labelled iqs9150 in the keyboard's I2C bus.
+ * キーボード側のI2C busにiqs9150ラベルの有効なセンサを定義する。
+ * No wiring, chosen KSCAN, matrix transform or keymap is provided here.
+ * 配線・chosen KSCAN・matrix transform・キーマップはここで定義しない。
+ */
+#ifndef TRAVELERS_PAD_IQS9150_POINTER_DTSI
+#define TRAVELERS_PAD_IQS9150_POINTER_DTSI
+
+#include <input/processors.dtsi>
+
+/ {
+    iqs9150_transform_gesture: iqs9150_transform_gesture {
+        compatible = "zmk,travelers-pad-iqs9150-transform-gesture";
+        input-device = <&iqs9150_session>;
+        /* Optional extension, disabled until KSCAN is integrated by the keyboard.
+         * 任意拡張。キーボード側でKSCANを統合するまでは無効にする。 */
+        rotation-disabled;
+        distance-threshold = <30000>;
+        rotation-threshold = <30000>;
+        pinch-step-threshold = <30000>;
+        rotation-step-threshold = <30000>;
+        status = "disabled";
+    };
+
+    iqs9150_router: iqs9150_router {
+        compatible = "zmk,travelers-pad-iqs9150-multifinger-router";
+        input-device = <&iqs9150_session>;
+        /* Follow the same transform enablement without runtime recognizer coupling.
+         * runtime依存を追加せず、transformの個別有効設定を参照する。 */
+        transform-device = <&iqs9150_transform_gesture>;
+        scroll-classify-move = <35>;
+        geometry-distance-threshold = <30000>;
+        geometry-rotation-threshold = <30000>;
+        status = "okay";
+    };
+
+    iqs9150_pointer: iqs9150_pointer {
+        compatible = "zmk,travelers-pad-iqs9150-pointer";
+        /* This profile uses the router output, not raw contact. It validates
+         * routing decisions and the following pointer hand-off only.
+         * このプロファイルは生接触ではなくrouter出力を使う。routerの判定と、
+         * その後段のポインタ受け渡しだけを検証する。 */
+        input-device = <&iqs9150_router>;
+        scroll-axis-lock-min-move = <12>;
+        scroll-axis-lock-ratio = <2>;
+        scroll-max-frame-delta = <128>;
+        status = "okay";
+    };
+
+    iqs9150_wheel_observation: iqs9150_wheel_observation {
+        compatible = "zmk,travelers-pad-canonical-wheel-input";
+        status = "okay";
+    };
+
+    iqs9150_scroll_inertia: iqs9150_scroll_inertia {
+        compatible = "zmk,travelers-pad-scroll-inertia";
+        contact-input-device = <&iqs9150_session>;
+        wheel-input-device = <&iqs9150_wheel_observation>;
+        wheel-output-device = <&iqs9150_pointer>;
+        start-delay-ms = <10>;
+        repeat-ms = <10>;
+        decay-numerator = <9>;
+        decay-denominator = <10>;
+        stop-delta = <2>;
+        max-delta = <300>;
+        /* Time-based glide: preserve fractional speed and travel.
+         * 時間基準の慣性：速度と移動の端数を保持する。 */
+        half-life-ms = <250>;
+        velocity-window-ms = <80>;
+        release-timeout-ms = <120>;
+        max-duration-ms = <3000>;
+        stop-speed = <20>;
+        status = "okay";
+    };
+
+    iqs9150_session: iqs9150_session {
+        compatible = "zmk,travelers-pad-contact-session-manager";
+        input-device = <&iqs9150>;
+        status = "okay";
+    };
+
+    iqs9150_tap_drag: iqs9150_tap_drag {
+        compatible = "zmk,travelers-pad-iqs9150-tap-drag";
+        /* Ownership is exchanged only through the contact arbiter. Its HID
+         * listener is enabled in this integration profile.
+         * 所有権はcontact arbiterだけを介して扱う。この結合profileではHID listenerも
+         * 有効にする。 */
+        input-device = <&iqs9150_session>;
+        tap-max-ms = <180>;
+        tap-max-move = <75>;
+        /* EV02 contact centroids can settle for several report periods
+         * after the second finger appears. The router still commits genuine
+         * scrolling independently; this value only prevents that settling
+         * from rejecting a stationary 2F/3F tap.
+         * EV02では2本目の検出後、重心が約2レポート周期安定化する。実際の
+         * スクロールはルーターが別に判定するため、この値は静止した2本/3本指
+         * タップを安定化中の座標変動で棄却しないためだけに使う。 */
+        multifinger-settle-ms = <120>;
+        double-tap-max-gap-ms = <250>;
+        double-tap-max-distance = <120>;
+        drag-start-move = <8>;
+        status = "okay";
+    };
+
+    iqs9150_pointer_listener: iqs9150_pointer_listener {
+        compatible = "zmk,input-listener";
+        device = <&iqs9150_pointer>;
+        /* Keep wheel tuning downstream from contact tracking. The scaler
+         * preserves fractional values; the tuning profile uses <1 4>.
+         * Keyboard overlays may replace
+         * this chain to invert either axis or select another multiplier.
+         * ホイール調整を接触追跡より後段へ分離する。scalerは端数を保持するため、
+         * 調整profileでは <1 4> を使う。キーボードoverlayは
+         * このchainを置換して軸反転または別の倍率を選択できる。 */
+        input-processors = <&zip_scroll_scaler 1 4>;
+        status = "okay";
+    };
+
+    iqs9150_tap_drag_listener: iqs9150_tap_drag_listener {
+        compatible = "zmk,input-listener";
+        device = <&iqs9150_tap_drag>;
+        status = "okay";
+    };
+};
+
+#endif

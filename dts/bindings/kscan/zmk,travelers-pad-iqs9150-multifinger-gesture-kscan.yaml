@@ -1,0 +1,27 @@
+description: Travelers Pad IQS9150 three/four-finger swipe and five-finger geometry virtual KSCAN
+
+compatible: "zmk,travelers-pad-iqs9150-multifinger-gesture-kscan"
+
+include: [kscan.yaml, base.yaml]
+
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: IQS9150 raw contact input device
+  swipe-min-move:
+    type: int
+    default: 180
+    description: Minimum centroid displacement required for a swipe
+  swipe-max-ms:
+    type: int
+    default: 700
+    description: Maximum contact duration accepted as a swipe
+  five-finger-radial-move:
+    type: int
+    default: 80
+    description: Per-contact radial movement required for five-finger grasp/release recognition
+  five-finger-stable-frames:
+    type: int
+    default: 3
+    description: Consecutive complete five-contact frames required before capturing a geometry baseline

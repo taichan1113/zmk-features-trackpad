@@ -1,0 +1,33 @@
+description: Travelers Pad IQS9150 two-finger pinch and rotation primary recognizer
+
+compatible: "zmk,travelers-pad-iqs9150-transform-gesture"
+
+include: [kscan.yaml, base.yaml]
+
+properties:
+  pinch-disabled:
+    type: boolean
+    description: Disable pinch recognition, ownership proposals and output / ピンチ認識・所有権要求・出力を無効化
+  rotation-disabled:
+    type: boolean
+    description: Disable rotation recognition, ownership proposals and output / 回転認識・所有権要求・出力を無効化
+  input-device:
+    type: phandle
+    required: true
+    description: Normalized contact-session input device
+  distance-threshold:
+    type: int
+    default: 30000
+    description: Squared-distance change required to classify a pinch
+  rotation-threshold:
+    type: int
+    default: 30000
+    description: Cross-product magnitude required to classify a rotation
+  pinch-step-threshold:
+    type: int
+    default: 30000
+    description: Squared-distance change required for each additional pinch action
+  rotation-step-threshold:
+    type: int
+    default: 30000
+    description: Cross-product magnitude required for each additional rotation action

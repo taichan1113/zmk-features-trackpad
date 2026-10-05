@@ -1,0 +1,30 @@
+description: Travelers Pad IQS9150 pointer and scroll function
+
+compatible: "zmk,travelers-pad-iqs9150-pointer"
+
+include: base.yaml
+
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: IQS9150 raw contact input device
+  scroll-axis-lock-min-move:
+    type: int
+    default: 12
+    description: >
+      Accumulated coordinate movement required before locking a two-finger
+      scroll axis. 2本指スクロールの軸を決定するまでに蓄積する座標移動量。
+  scroll-axis-lock-ratio:
+    type: int
+    default: 2
+    description: >
+      Horizontal-to-vertical ratio required to choose horizontal scrolling;
+      otherwise vertical is selected. 横スクロールを選ぶために必要な横/縦移動比。
+      それ以外は縦スクロールを選ぶ。
+  scroll-max-frame-delta:
+    type: int
+    default: 128
+    description: >
+      Per-frame coordinate delta above which a scroll frame is discarded and
+      rebased. この値を超える1フレーム差分は破棄して座標基準を更新する。

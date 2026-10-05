@@ -1,0 +1,8 @@
+description: Travelers Pad normalized contact session manager
+compatible: "zmk,travelers-pad-contact-session-manager"
+include: base.yaml
+properties:
+  input-device:
+    type: phandle
+    required: true
+    description: IQS9150 normalized raw contact input
