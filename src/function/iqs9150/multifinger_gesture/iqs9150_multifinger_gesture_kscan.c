@@ -34,6 +34,8 @@ struct gesture_config {
 	uint16_t swipe_max_ms;
 	uint16_t five_finger_radial_move;
 	uint8_t five_finger_stable_frames;
+ uint16_t four_finger_hold_ms;
+ uint16_t four_finger_hold_slop;
 };
 
 struct gesture_data {
@@ -68,6 +70,14 @@ struct gesture_data {
 	bool pending_five_finger_action;
 	enum five_finger_candidate pending_five_finger_candidate;
 	uint32_t pending_five_finger_frame_seq;
+ bool hold_tracking;
+ bool hold_cancelled;
+ bool hold_confirmed;
+ int64_t hold_started_ms;
+ uint16_t hold_x[TRAVELERS_PAD_MAX_CONTACTS];
+ uint16_t hold_y[TRAVELERS_PAD_MAX_CONTACTS];
+ int32_t hold_id[TRAVELERS_PAD_MAX_CONTACTS];
+ bool hold_valid[TRAVELERS_PAD_MAX_CONTACTS];
 };
 
 static int absolute_int(int value) { return value < 0 ? -value : value; }
@@ -317,6 +327,9 @@ static void emit_five_finger_gesture(const struct device *dev,
 
 static void reset_session(struct gesture_data *data)
 {
+	data->hold_tracking = false;
+	data->hold_cancelled = false;
+	data->hold_confirmed = false;
 	data->previous_fingers = 0;
 	data->max_fingers = 0;
 	data->moved = false;
@@ -329,6 +342,46 @@ static void reset_session(struct gesture_data *data)
 	data->claim_submitted = false;
 	data->pending_five_finger_action = false;
 	data->pending_five_finger_frame_seq = 0;
+}
+
+/* Optional stationary 4F action. Claim in a live frame, dispatch only after
+ * all contacts lift so the new keymap layer cannot interpret landing fingers.
+ * 4本指静止を生frameでclaimし、全指解放後にだけ仮想キーを発行する。 */
+static void process_four_finger_hold(const struct device *dev, int64_t now)
+{
+ const struct gesture_config *cfg = dev->config;
+ struct gesture_data *data = dev->data;
+ if (!cfg->four_finger_hold_ms || data->hold_cancelled || data->hold_confirmed ||
+     data->moved || data->claim_submitted || data->cancelled_by_drag_owner ||
+     data->cancelled_by_owner) return;
+ if (data->fingers != 4 || data->max_fingers != 4 || active_contact_count(data) != 4) {
+  if (data->hold_tracking) data->hold_cancelled = true;
+  return;
+ }
+ if (!data->hold_tracking) {
+  data->hold_tracking = true;
+  data->hold_started_ms = now;
+  for (uint8_t i = 0; i < TRAVELERS_PAD_MAX_CONTACTS; i++) {
+   data->hold_valid[i] = data->slot_valid[i];
+   data->hold_id[i] = data->slot_tracking_id[i];
+   data->hold_x[i] = data->slot_x[i];
+   data->hold_y[i] = data->slot_y[i];
+  }
+ }
+ for (uint8_t i = 0; i < TRAVELERS_PAD_MAX_CONTACTS; i++) {
+  if (data->hold_valid[i] != data->slot_valid[i] ||
+      (data->hold_valid[i] && (data->hold_id[i] != data->slot_tracking_id[i] ||
+       absolute_int((int)data->slot_x[i] - data->hold_x[i]) > cfg->four_finger_hold_slop ||
+       absolute_int((int)data->slot_y[i] - data->hold_y[i]) > cfg->four_finger_hold_slop))) {
+   data->hold_cancelled = true;
+   return;
+  }
+ }
+ if (now - data->hold_started_ms >= cfg->four_finger_hold_ms &&
+     claim_multifinger_gesture(data, now - data->hold_started_ms)) {
+  data->hold_confirmed = true;
+  LOG_INF("4F hold confirmed; action waits for all contacts to lift");
+ }
 }
 
 static void gesture_process_frame(const struct device *dev)
@@ -384,7 +437,8 @@ static void gesture_process_frame(const struct device *dev)
 		 * output suppression because proposal creation is itself a side effect.
 		 * 検出済みのdrag ownerはgestureが競合ownerをproposalすること自体を阻止する。
 		 * 終端出力の抑止とは別にする。proposal生成自体が副作用となるためである。 */
-		if (data->max_fingers >= 3 && !data->moved && !data->cancelled_by_drag_owner &&
+		process_four_finger_hold(dev, now);
+		if (data->max_fingers >= 3 && !data->moved && !data->hold_confirmed && !data->cancelled_by_drag_owner &&
 	    (absolute_int((int)data->x - data->start_x) >= cfg->swipe_min_move ||
 	    absolute_int((int)data->y - data->start_y) >= cfg->swipe_min_move)) {
 			uint32_t move = absolute_int((int)data->x - data->start_x) +
@@ -396,11 +450,16 @@ static void gesture_process_frame(const struct device *dev)
 				data->cancelled_by_owner = true;
 			}
 		}
-		if (data->max_fingers == 5 && !data->cancelled_by_drag_owner) {
+		if (data->max_fingers == 5 && !data->hold_confirmed && !data->cancelled_by_drag_owner) {
 			process_five_finger_geometry(dev);
 		}
 	} else if (data->previous_fingers != 0) {
-		if (data->max_fingers == 5 && data->five_finger_candidate != FIVE_FINGER_NONE) {
+		if (data->hold_confirmed) {
+   if (travelers_pad_output_behavior_primary(data->dev, data->callback,
+       data->ownership_frame_seq, TRAVELERS_PAD_RECOGNIZER_MULTIFINGER_GESTURE,
+       TRAVELERS_PAD_OWNER_MULTI_GESTURE, 2, 2, "multifinger-hold") == 0)
+    LOG_INF("4F hold action dispatched after release");
+  } else if (data->max_fingers == 5 && data->five_finger_candidate != FIVE_FINGER_NONE) {
 			LOG_INF("5F %s gesture complete",
 				five_finger_candidate_name(data->five_finger_candidate));
 		} else if (!data->cancelled_by_drag_owner && !data->cancelled_by_owner &&
@@ -459,12 +518,18 @@ static int gesture_init(const struct device *dev)
 }
 
 #define GESTURE_INST(n)                                                                        \
+ BUILD_ASSERT(DT_INST_PROP(n, four_finger_hold_ms) >= 0 && \
+              DT_INST_PROP(n, four_finger_hold_ms) <= UINT16_MAX, "hold duration out of range"); \
+ BUILD_ASSERT(DT_INST_PROP(n, four_finger_hold_slop) >= 0 && \
+              DT_INST_PROP(n, four_finger_hold_slop) <= UINT16_MAX, "hold slop out of range"); \
 	static struct gesture_data gesture_data_##n;                                                 \
 	static const struct gesture_config gesture_config_##n = {                                   \
 		.swipe_min_move = DT_INST_PROP_OR(n, swipe_min_move, 180),                            \
 		.swipe_max_ms = DT_INST_PROP_OR(n, swipe_max_ms, 700),                                \
 		.five_finger_radial_move = DT_INST_PROP_OR(n, five_finger_radial_move, 80),          \
 		.five_finger_stable_frames = DT_INST_PROP_OR(n, five_finger_stable_frames, 3),       \
+  .four_finger_hold_ms = DT_INST_PROP_OR(n, four_finger_hold_ms, 0), \
+  .four_finger_hold_slop = DT_INST_PROP_OR(n, four_finger_hold_slop, 60), \
 	};                                                                                           \
 	static void gesture_input_handler_##n(struct input_event *evt)                              \
 	{                                                                                            \

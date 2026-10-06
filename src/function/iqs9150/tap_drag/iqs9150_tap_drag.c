@@ -24,6 +24,7 @@
 
 #include <travelers_pad/multitouch.h>
 #include <travelers_pad/contact_arbiter.h>
+#include <zmk/keymap.h>
 #include <travelers_pad/contact_output_broker.h>
 
 LOG_MODULE_REGISTER(travelers_pad_tap_drag, LOG_LEVEL_INF);
@@ -31,6 +32,7 @@ LOG_MODULE_REGISTER(travelers_pad_tap_drag, LOG_LEVEL_INF);
 #define TRAVELERS_PAD_DRAG_MAX_FRAME_DELTA 256
 
 struct tap_drag_config {
+ uint8_t disabled_layer;
 	uint16_t tap_max_ms;
 	uint16_t tap_max_move;
 	uint16_t multifinger_settle_ms;
@@ -520,6 +522,14 @@ static void finish_contact(const struct device *dev, const struct tap_drag_confi
 
 static void process_frame(const struct device *dev)
 {
+ const struct tap_drag_config *layer_cfg = dev->config;
+ struct tap_drag_data *layer_data = dev->data;
+ if (layer_cfg->disabled_layer != UINT8_MAX &&
+     zmk_keymap_layer_active(layer_cfg->disabled_layer)) {
+  if (layer_data->button_down) report_button(layer_data, false);
+  cancel_tap_drag_after_reset(layer_data);
+  return;
+ }
 	const struct tap_drag_config *cfg = dev->config;
 	struct tap_drag_data *data = dev->data;
 	int64_t now = k_uptime_get();
@@ -748,8 +758,12 @@ static int tap_drag_init(const struct device *dev)
 }
 
 #define TAP_DRAG_INST(n)                                                                      \
+ BUILD_ASSERT(DT_INST_PROP(n, disabled_layer) == 255 || \
+              (DT_INST_PROP(n, disabled_layer) >= 0 && DT_INST_PROP(n, disabled_layer) < 32), \
+              "disabled-layer must be a layer index 0..31 or 255"); \
 	static struct tap_drag_data tap_drag_data_##n = {.dev = DEVICE_DT_INST_GET(n)};            \
 	static const struct tap_drag_config tap_drag_config_##n = {                                \
+  .disabled_layer = DT_INST_PROP_OR(n, disabled_layer, 255), \
 		.tap_max_ms = DT_INST_PROP_OR(n, tap_max_ms, 180),                                    \
 		.tap_max_move = DT_INST_PROP_OR(n, tap_max_move, 75),                                \
 		.multifinger_settle_ms = DT_INST_PROP_OR(n, multifinger_settle_ms, 45),              \

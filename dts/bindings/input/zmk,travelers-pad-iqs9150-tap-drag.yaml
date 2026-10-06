@@ -5,6 +5,10 @@ compatible: "zmk,travelers-pad-iqs9150-tap-drag"
 include: base.yaml
 
 properties:
+  disabled-layer:
+    type: int
+    default: 255
+    description: Layer index on which tap/drag tracking and deferred clicks are cleared; 255 disables this filter.
   input-device:
     type: phandle
     required: true

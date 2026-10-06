@@ -80,6 +80,23 @@ Pinch and rotation are separately selectable; rotation is disabled in the
 validated configuration. Their recognition thresholds may require tuning for
 the sensor surface and finger placement.
 
+### Stationary four-finger action
+
+Set `four-finger-hold-ms` on the multi-finger gesture node to enable an optional
+stationary four-finger action (default: 0, disabled). `four-finger-hold-slop`
+sets the maximum displacement of each contact on either axis (default: 60
+sensor units). Contact replacement, a count change before confirmation, or
+excessive movement cancels the hold candidate. Existing competing ownership
+is respected. The action uses local KSCAN row 2, column 2, and is emitted once
+after all contacts lift. The keyboard decides its binding; it need not be a
+Bluetooth operation. Map that extra physical position before enabling it.
+
+The tap/drag node also accepts `disabled-layer` (default: 255, no filter).
+On that layer it clears tracking and pending clicks while continuing to
+acknowledge arbiter frames. This is useful when a keyboard uses the surface
+for a non-mouse control layer. Output suppression and grid routing remain
+keyboard integration responsibilities.
+
 ### Troubleshooting
 
 - If the host pointer does not move, verify the input device label and the
@@ -169,6 +186,20 @@ virtual key機能には、キーボード側のKSCAN合成とkey bindingが必�
 互換virtual KSCAN sourceとlayoutを用意してください。
 ピンチと回転は個別に選択できます。確認済み構成では回転を無効にしています。
 センサー面や指の位置に応じて認識閾値の調整が必要な場合があります。
+
+### 4本指静止による操作
+
+多指ジェスチャーnodeの`four-finger-hold-ms`で任意の4本指静止操作を有効にします。
+既定値0は無効です。`four-finger-hold-slop`は各指のX/Y変位の許容値で、
+既定値はセンサー座標60です。成立前の指の入れ替え、本数変化、過大な移動で
+候補を取り消します。既存の競合ownerを尊重し、全指を離した後にローカルKSCANの
+行2・列2へ一回だけ出力します。有効化する前にこの物理位置をmapしてください。
+割り当てはキーボード側で決めるため、Bluetooth操作に限定しません。
+
+tap/drag nodeの`disabled-layer`は既定値255（制限なし）です。指定レイヤー中は
+追跡と遅延クリックを破棄しますが、arbiter frameのacknowledgeは継続します。
+マウス以外の操作にパッドを使うレイヤー向けの設定です。出力抑止と格子の経路設定は
+キーボード側の責務です。
 
 ### トラブルシューティング
 

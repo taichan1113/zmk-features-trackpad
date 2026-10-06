@@ -5,6 +5,14 @@ compatible: "zmk,travelers-pad-iqs9150-multifinger-gesture-kscan"
 include: [kscan.yaml, base.yaml]
 
 properties:
+  four-finger-hold-ms:
+    type: int
+    default: 0
+    description: Optional stationary four-finger hold duration; zero disables. Reports row 2 column 2 after all contacts lift.
+  four-finger-hold-slop:
+    type: int
+    default: 60
+    description: Maximum per-contact X or Y displacement during the hold in sensor units.
   input-device:
     type: phandle
     required: true
