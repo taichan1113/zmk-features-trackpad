@@ -94,6 +94,10 @@ static int16_t decay_velocity(int16_t value, const struct scroll_inertia_config 
 
 static void clear_inertia_state(struct scroll_inertia_data *data)
 {
+	/* Revoked output can return before the normal emitting=false epilogue.
+	 * Do not let that transient guard suppress a later session's wheel samples.
+	 * 出力権限取消で早期returnしても、次セッションの速度観測を抑止しない。 */
+	data->emitting = false;
 	data->horizontal_velocity = 0;
 	data->vertical_velocity = 0;
 	data->horizontal_velocity_fp = 0;
@@ -203,7 +207,7 @@ static void inertia_work_handler(struct k_work *work)
 			data->horizontal_velocity, data->vertical_velocity == 0, "scroll-inertia-hwheel");
 		if (rc != 0) {
 			if (rc == -EACCES) {
-				LOG_DBG("scroll inertia cancelled: lease revoked");
+				LOG_INF("scroll inertia cancelled: lease revoked during horizontal output");
 				stop_inertia_from_work(data);
 				return;
 			}
@@ -217,7 +221,7 @@ static void inertia_work_handler(struct k_work *work)
 			data->vertical_velocity, true, "scroll-inertia-wheel");
 		if (rc != 0) {
 			if (rc == -EACCES) {
-				LOG_DBG("scroll inertia cancelled: lease revoked");
+				LOG_INF("scroll inertia cancelled: lease revoked during vertical output");
 				stop_inertia_from_work(data);
 				return;
 			}
