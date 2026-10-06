@@ -54,6 +54,7 @@ struct tap_drag_data {
 	bool reference_slot_valid[TRAVELERS_PAD_MAX_CONTACTS];
 	uint8_t fingers;
 	uint8_t previous_fingers;
+	bool reference_changed;
 	uint8_t max_fingers;
 	uint16_t start_x;
 	uint16_t start_y;
@@ -547,6 +548,17 @@ static void process_frame(const struct device *dev)
 		/* F-slot assignment can change between taps; centroid is invariant. */
 		update_contact_centroid(data);
 	}
+	if (data->reference_changed) {
+		/* Slot handoff is not host motion. Keep a held button/owner, rebase
+		 * the next drag delta, and do not activate a pending drag by the jump.
+		 * slot交代を移動としない。button/ownerを保持して差分基準だけ更新。 */
+		data->drag_position_valid = false;
+		if (data->second_tap && !data->drag_motion_active) {
+			data->start_x = data->x;
+			data->start_y = data->y;
+		}
+		data->reference_changed = false;
+	}
 
 	if (data->sensor_reset) {
 		if (data->button_down) {
@@ -699,7 +711,10 @@ static void tap_drag_handle_input(const struct device *dev, struct input_event *
 {
 	struct tap_drag_data *data = dev->data;
 
-	if (evt->type == INPUT_EV_ABS) {
+	if (evt->type == INPUT_EV_MSC &&
+	    evt->code == TRAVELERS_PAD_INPUT_MSC_CONTACT_REFERENCE_CHANGED) {
+		data->reference_changed = evt->value != 0;
+	} else if (evt->type == INPUT_EV_ABS) {
 		if (evt->code == INPUT_ABS_MT_SLOT) {
 			data->slot = evt->value;
 		} else if (evt->code == TRAVELERS_PAD_INPUT_ABS_MT_TRACKING_ID &&

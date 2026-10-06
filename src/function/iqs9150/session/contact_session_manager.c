@@ -18,6 +18,8 @@
 #include <travelers_pad/contact_arbiter.h>
 #include <travelers_pad/contact_output_broker.h>
 #include <travelers_pad/contact_session.h>
+#include <travelers_pad/contact_stability.h>
+#include <travelers_pad/multitouch.h>
 
 LOG_MODULE_REGISTER(travelers_pad_session, LOG_LEVEL_INF);
 
@@ -31,7 +33,14 @@ struct session_data {
 	 * recognizerが同frameを処理する間は不変copyをarbiterへ渡す。 */
 	struct travelers_pad_session_snapshot dispatch_snapshot;
 	bool reset_pending;
+	uint8_t slot, raw_mask, emitted_mask, representative;
+	uint16_t x[TRAVELERS_PAD_MAX_CONTACTS], y[TRAVELERS_PAD_MAX_CONTACTS];
+	int32_t id[TRAVELERS_PAD_MAX_CONTACTS], emitted_id[TRAVELERS_PAD_MAX_CONTACTS];
+	bool have_representative;
+	struct travelers_pad_contact_stability stability;
 };
+
+struct session_config { uint16_t extra_contact_confirm_ms; };
 
 static void session_process(const struct device *dev)
 {
@@ -72,11 +81,80 @@ static void session_process(const struct device *dev)
 	data->dispatch_snapshot = *s;
 }
 
+static void session_emit_frame(const struct device *dev)
+{
+	struct session_data *data = dev->data;
+	const struct session_config *cfg = dev->config;
+	bool reset = data->reset_pending;
+	if (reset) {
+		data->raw_mask = 0;
+		data->stability = (struct travelers_pad_contact_stability){};
+	}
+	uint8_t mask = travelers_pad_stabilize_contacts(&data->stability, data->raw_mask,
+		k_uptime_get(), cfg->extra_contact_confirm_ms);
+	uint8_t first = data->have_representative && (mask & BIT(data->representative)) ?
+		data->representative : travelers_pad_first_contact(mask);
+	uint8_t second = first < TRAVELERS_PAD_MAX_CONTACTS ?
+		travelers_pad_first_contact(mask & ~BIT(first)) : TRAVELERS_PAD_MAX_CONTACTS;
+	bool changed = mask && data->have_representative && first != data->representative;
+	data->snapshot.contact_count = travelers_pad_contact_count(mask);
+	data->snapshot.frame_seq = ++data->next_frame_seq;
+	data->snapshot.timestamp_ms = k_uptime_get();
+	session_process(dev);
+	/* Every primary receives the same filtered frame. No proposal/owner change.
+	 * 全primaryへ同一の安定化frameを配信。proposal/ownerは操作しない。 */
+	travelers_pad_arbiter_begin_frame(&data->dispatch_snapshot);
+	int rc = 0;
+	for (uint8_t slot = 0; slot < TRAVELERS_PAD_MAX_CONTACTS; slot++) {
+		bool active = mask & BIT(slot);
+		bool was_active = data->emitted_mask & BIT(slot);
+		if (!active && !was_active) continue;
+		rc |= input_report_abs(dev, INPUT_ABS_MT_SLOT, slot, false, K_NO_WAIT);
+		if (active != was_active || (active && data->id[slot] != data->emitted_id[slot])) {
+			rc |= input_report_abs(dev, TRAVELERS_PAD_INPUT_ABS_MT_TRACKING_ID,
+				active ? data->id[slot] : -1, false, K_NO_WAIT);
+		}
+		if (active) {
+			rc |= input_report_abs(dev, TRAVELERS_PAD_INPUT_ABS_MT_POSITION_X, data->x[slot], false, K_NO_WAIT);
+			rc |= input_report_abs(dev, TRAVELERS_PAD_INPUT_ABS_MT_POSITION_Y, data->y[slot], false, K_NO_WAIT);
+		}
+		data->emitted_id[slot] = data->id[slot];
+	}
+	if (reset) rc |= input_report_abs(dev, INPUT_ABS_RZ, 1, false, K_NO_WAIT);
+	rc |= input_report(dev, INPUT_EV_MSC, TRAVELERS_PAD_INPUT_MSC_CONTACT_REFERENCE_CHANGED,
+		changed, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_X, mask ? data->x[first] : UINT16_MAX, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_Y, mask ? data->y[first] : UINT16_MAX, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_RX, second < TRAVELERS_PAD_MAX_CONTACTS ? data->x[second] : UINT16_MAX, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_RY, second < TRAVELERS_PAD_MAX_CONTACTS ? data->y[second] : UINT16_MAX, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_RUDDER, second < TRAVELERS_PAD_MAX_CONTACTS, false, K_NO_WAIT);
+	rc |= input_report_abs(dev, INPUT_ABS_Z, data->snapshot.contact_count, false, K_NO_WAIT);
+	/* snapshot was cleared at normal release; both values are zero then. */
+	rc |= input_report_key(dev, INPUT_BTN_TOUCH, mask != 0, true, K_NO_WAIT);
+	data->emitted_mask = mask;
+	data->representative = first;
+	data->have_representative = mask != 0;
+	if (rc != 0) LOG_ERR("session frame forward failed: %d", rc);
+}
+
 static void session_input(const struct device *dev, struct input_event *evt)
 {
 	struct session_data *data = dev->data;
-	if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_Z) {
-		data->snapshot.contact_count = evt->value;
+	if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_MT_SLOT) {
+		data->slot = evt->value;
+	} else if (evt->type == INPUT_EV_ABS && data->slot < TRAVELERS_PAD_MAX_CONTACTS &&
+		   evt->code == TRAVELERS_PAD_INPUT_ABS_MT_TRACKING_ID) {
+		data->id[data->slot] = evt->value;
+		if (evt->value >= 0) data->raw_mask |= BIT(data->slot);
+		else data->raw_mask &= ~BIT(data->slot);
+	} else if (evt->type == INPUT_EV_ABS && data->slot < TRAVELERS_PAD_MAX_CONTACTS &&
+		   evt->code == TRAVELERS_PAD_INPUT_ABS_MT_POSITION_X) {
+		data->x[data->slot] = evt->value;
+	} else if (evt->type == INPUT_EV_ABS && data->slot < TRAVELERS_PAD_MAX_CONTACTS &&
+		   evt->code == TRAVELERS_PAD_INPUT_ABS_MT_POSITION_Y) {
+		data->y[data->slot] = evt->value;
+	} else if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_Z && evt->value == 0) {
+		data->raw_mask = 0;
 	} else if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_RZ && evt->value) {
 		data->reset_pending = true;
 		/* Do not wait for a session-bound cancellation frame: the active snapshot
@@ -86,32 +164,16 @@ static void session_input(const struct device *dev, struct input_event *evt)
 		travelers_pad_output_cancel_all("sensor-reset-event");
 	}
 	if (evt->sync) {
-		/* frame_seq is global rather than per-session so it can identify a
-		 * forwarded frame after it crosses Zephyr's asynchronous input queue. */
-		data->snapshot.frame_seq = ++data->next_frame_seq;
-		data->snapshot.timestamp_ms = k_uptime_get();
-		session_process(dev);
-		/* The configured input mode is queued, not synchronous. Store the logical
-		 * frame now; each arbiter recognizer later obtains its next unacknowledged
-		 * frame in FIFO order while handling the forwarded sync event. No extra
-		 * input event is injected, so a full queue cannot drop contact data.
-		 * 設定されたinput modeは同期でなくqueue方式である。論理frameをここで保存し、
-		 * 各arbiter recognizerはforwardされたsync event処理時にFIFO順で未通知frameを
-		 * 得る。余分なinput eventを挿入しないため、満杯queueでも接触dataを落とさない。 */
-		travelers_pad_arbiter_begin_frame(&data->dispatch_snapshot);
-	}
-	/* This is the sole subscription to the driver raw stream. Re-publish the
-	 * immutable normalized frame after session bookkeeping; recognizers migrate
-	 * to this device before their proposal APIs are introduced. */
-	if (input_report(dev, evt->type, evt->code, evt->value, evt->sync, K_NO_WAIT) != 0) {
-		LOG_ERR("session frame forward failed");
+		session_emit_frame(dev);
 	}
 }
 
 #define SESSION_INST(n) \
 	static struct session_data session_data_##n; \
+	static const struct session_config session_config_##n = { \
+		.extra_contact_confirm_ms = DT_INST_PROP_OR(n, extra_contact_confirm_ms, 35) }; \
 	static void session_input_##n(struct input_event *evt) { session_input(DEVICE_DT_INST_GET(n), evt); } \
 	INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_INST_PHANDLE(n, input_device)), session_input_##n); \
-	DEVICE_DT_INST_DEFINE(n, NULL, NULL, &session_data_##n, NULL, POST_KERNEL, \
+	DEVICE_DT_INST_DEFINE(n, NULL, NULL, &session_data_##n, &session_config_##n, POST_KERNEL, \
 		CONFIG_TRAVELERS_PAD_IQS9150_FUNCTION_INIT_PRIORITY, NULL);
 DT_INST_FOREACH_STATUS_OKAY(SESSION_INST)

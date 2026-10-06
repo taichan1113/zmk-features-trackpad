@@ -70,6 +70,7 @@ struct router_data {
 	 * 保留する。pointer adapterが開いた論理接触を追跡し、所有権移行時に一度だけ
 	 * cancelできるようにする。 */
 	bool pointer_stream_open;
+	bool reference_changed;
 };
 
 static int32_t abs32(int32_t value)
@@ -296,6 +297,12 @@ static void router_deliver_resolved_frame(
 	struct router_data *data = context;
 	const struct device *dev = data->dev;
 	enum travelers_pad_owner owner = token != NULL ? token->owner : TRAVELERS_PAD_OWNER_NONE;
+	if (data->reference_changed) {
+		/* Rebase only the ordinary pointer adapter, never the session/owner.
+		 * 通常pointerの基準だけ更新し、session/ownerは維持する。 */
+		router_suppress_pointer(dev, data);
+		data->reference_changed = false;
+	}
 
 	if (snapshot->cancelled || data->sensor_reset) {
 		router_suppress_pointer(dev, data);
@@ -404,7 +411,10 @@ static void router_handle_input(const struct device *dev, struct input_event *ev
 {
 	struct router_data *data = dev->data;
 
-	if (evt->type == INPUT_EV_ABS) {
+	if (evt->type == INPUT_EV_MSC &&
+	    evt->code == TRAVELERS_PAD_INPUT_MSC_CONTACT_REFERENCE_CHANGED) {
+		data->reference_changed = evt->value != 0;
+	} else if (evt->type == INPUT_EV_ABS) {
 		if (evt->code == INPUT_ABS_X) {
 			data->x = evt->value;
 		} else if (evt->code == INPUT_ABS_Y) {
