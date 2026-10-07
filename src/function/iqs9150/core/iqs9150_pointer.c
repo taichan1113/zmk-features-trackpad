@@ -8,6 +8,8 @@
 
 #define DT_DRV_COMPAT zmk_travelers_pad_iqs9150_pointer
 
+#include <stdint.h>
+
 #include <zephyr/device.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/input/input.h>
@@ -47,6 +49,7 @@ struct pointer_data {
 	int32_t scroll_probe_x;
 	int32_t scroll_probe_y;
 	bool reset_frame;
+	uint8_t frame_fields;
 };
 
 static int32_t absolute_int32(int32_t value)
@@ -199,6 +202,21 @@ static void process_frame(const struct device *dev) {
 	}
 
 	if (data->fingers != 0) {
+		/* UINT16_MAX is the normalized no-coordinate sentinel, not movement.
+		 * Do not narrow its subtraction to int16_t: that wraps to a large
+		 * negative delta. Preserve scroll ownership, but discard its baseline.
+		 * 無効座標の差分をint16_tへ変換すると大きな負値になる。移動を捨て、
+		 * scroll所有状態は維持したまま、次の有効frameで基準を取り直す。 */
+		if (data->x == UINT16_MAX || data->y == UINT16_MAX) {
+			if (data->have_position) {
+				LOG_WRN("invalid pointer coordinates discarded: frame=%u fingers=%u x=%u y=%u",
+					data->routed_frame_seq, data->fingers, data->x, data->y);
+			}
+			data->have_position = false;
+			data->previous_fingers = 0;
+			reset_scroll_state(data);
+			return;
+		}
 		if (!data->scroll_session && data->fingers >= 2) {
 			/* The 1F-to-2F centroid transition is not a scroll movement. */
 			data->scroll_session = true;
@@ -225,7 +243,7 @@ static void process_frame(const struct device *dev) {
 		data->previous_x = data->x;
 		data->previous_y = data->y;
 		data->have_position = true;
-	} else if (data->previous_fingers != 0) {
+	} else {
 		data->have_position = false;
 		data->scroll_session = false;
 		reset_scroll_state(data);
@@ -250,15 +268,19 @@ static void pointer_handle_input(const struct device *dev, struct input_event *e
 	case INPUT_EV_MSC:
 		if (evt->code == TRAVELERS_PAD_INPUT_MSC_ROUTED_FRAME_SEQ) {
 			data->routed_frame_seq = evt->value;
+			data->frame_fields = 0;
 		}
 		break;
 	case INPUT_EV_ABS:
 		if (evt->code == INPUT_ABS_X) {
-			data->x = evt->value;
+			data->x = evt->value >= 0 && evt->value < UINT16_MAX ? evt->value : UINT16_MAX;
+			data->frame_fields |= BIT(0);
 		} else if (evt->code == INPUT_ABS_Y) {
-			data->y = evt->value;
+			data->y = evt->value >= 0 && evt->value < UINT16_MAX ? evt->value : UINT16_MAX;
+			data->frame_fields |= BIT(1);
 		} else if (evt->code == INPUT_ABS_Z) {
 			data->fingers = evt->value;
+			data->frame_fields |= BIT(2);
 		} else if (evt->code == INPUT_ABS_RZ && evt->value) {
 			data->reset_frame = true;
 		}
@@ -268,7 +290,19 @@ static void pointer_handle_input(const struct device *dev, struct input_event *e
 	}
 
 	if (evt->sync) {
-		process_frame(dev);
+		/* An incomplete frame must not reuse the preceding contact count. */
+		if (data->reset_frame || data->frame_fields == (BIT(0) | BIT(1) | BIT(2))) {
+			process_frame(dev);
+		} else {
+			if (data->have_position) {
+				LOG_WRN("incomplete pointer frame discarded: frame=%u fields=0x%02x",
+					data->routed_frame_seq, data->frame_fields);
+			}
+			data->have_position = false;
+			data->previous_fingers = 0;
+			reset_scroll_state(data);
+		}
+		data->frame_fields = 0;
 	}
 }
 
