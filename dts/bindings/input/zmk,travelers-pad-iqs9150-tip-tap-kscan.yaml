@@ -3,6 +3,10 @@ compatible: "zmk,travelers-pad-iqs9150-tip-tap-kscan"
 include: base.yaml
 properties:
   input-device: {type: phandle, required: true}
+  anchor-min-hold-ms:
+    type: int
+    default: 250
+    description: Minimum stationary one-finger anchor time before adding the second contact. Already-owned repeated Tip-Taps do not wait again. Zero retains immediate acquisition.
   second-contact-timeout-ms: {type: int, default: 180}
   contact-slop: {type: int, default: 75}
   minimum-horizontal-separation: {type: int, default: 160}

@@ -1,18 +1,20 @@
 /* Two-finger Tip-Tap recognizer / 2本指Tip-Tap認識器. */
 #define DT_DRV_COMPAT zmk_travelers_pad_iqs9150_tip_tap_kscan
+#include <stdint.h>
 #include <zephyr/device.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/drivers/kscan.h>
 #include <zephyr/input/input.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 #include <travelers_pad/contact_arbiter.h>
 #include <travelers_pad/contact_output_broker.h>
 #include <travelers_pad/multitouch.h>
 
 LOG_MODULE_REGISTER(travelers_pad_tip_tap, LOG_LEVEL_INF);
 
-struct cfg { uint16_t max_ms, slop, separation; bool invert; };
+struct cfg { uint16_t max_ms, slop, separation, anchor_min_hold_ms; bool invert; };
 struct data {
 	const struct device *dev;
 	kscan_callback_t callback; uint16_t x[TRAVELERS_PAD_MAX_CONTACTS], y[TRAVELERS_PAD_MAX_CONTACTS];
@@ -27,6 +29,7 @@ struct data {
 	 * arbiter proposalは各repeatではなく、anchorを含む一連の操作を表す。 */
 	bool candidate, fired, reset, tip_owned, pending_action, pending_left;
 	uint32_t pending_frame_seq;
+	int64_t anchor_stable_since;
 };
 static uint16_t absi(int value) { return value < 0 ? -value : value; }
 static void reset(struct data *d) {
@@ -38,6 +41,8 @@ static void reset(struct data *d) {
 	d->pending_frame_seq = 0;
 	d->anchor_id = -1;
 	d->second_id = -1;
+	d->previous = 0;
+	d->anchor_stable_since = 0;
 }
 
 static void tip_tap_resolve_action(void *context, const struct travelers_pad_owner_token *token,
@@ -101,13 +106,38 @@ static void process(const struct device *dev)
 	struct data *d=dev->data; const struct cfg *c=dev->config; int64_t now=k_uptime_get();
 	if (d->reset) { reset(d); d->reset=false; return; }
 	if (d->fingers == 1 && d->previous == 0) {
-		for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i]) { d->anchor=i; d->anchor_id=d->id[i]; d->ax=d->x[i]; d->ay=d->y[i]; break; }
+		for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i]) { d->anchor=i; d->anchor_id=d->id[i]; d->ax=d->x[i]; d->ay=d->y[i]; d->anchor_stable_since=now; break; }
 	}
-	if (d->fingers == 2 && d->previous < 2 && d->anchor_id >= 0) {
+	/* A normal 1->2->1 staggered tap is not an anchored Tip-Tap. Only a
+	 * pre-existing stationary anchor may arm it. No timer output or claim.
+	 * 通常の2Fタップの接触差をTip-Tapにしない。先に静止したanchorだけを認める。 */
+	if (d->anchor_id >= 0 && (!d->valid[d->anchor] || d->id[d->anchor] != d->anchor_id)) {
+		d->anchor_id = -1;
+		d->candidate = false;
+	}
+	if (d->fingers == 1 && d->previous == 1 && !d->tip_owned && d->anchor_id >= 0 &&
+	    (absi((int)d->x[d->anchor] - d->ax) > c->slop ||
+	     absi((int)d->y[d->anchor] - d->ay) > c->slop)) {
+		d->ax = d->x[d->anchor]; d->ay = d->y[d->anchor];
+		d->anchor_stable_since = now;
+	}
+	if (d->fingers > 2) {
+		d->candidate = false;
+		d->anchor_id = -1;
+	}
+	if (d->fingers == 2 && d->previous == 1 && d->anchor_id >= 0) {
+		d->candidate = false;
+		bool anchor_ready = d->tip_owned || now - d->anchor_stable_since >= c->anchor_min_hold_ms;
+		if (!anchor_ready) {
+			LOG_INF("Tip-Tap ignored: anchor age=%lld ms minimum=%u ms",
+				(long long)(now - d->anchor_stable_since), c->anchor_min_hold_ms);
+		}
 		/* The anchor stays down across a repeat. Re-arm only the temporary
 		 * second contact; the session remains exclusively TIP_TAP-owned. */
 		d->fired=false;
-		for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i] && i!=d->anchor) { d->second=i; d->second_id=d->id[i]; d->sx=d->x[i]; d->sy=d->y[i]; d->second_start=now; d->candidate=true; break; }
+		if (anchor_ready) {
+			for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i] && i!=d->anchor) { d->second=i; d->second_id=d->id[i]; d->sx=d->x[i]; d->sy=d->y[i]; d->second_start=now; d->candidate=true; break; }
+		}
 	}
 	if (d->candidate && d->fingers == 2 && (!d->valid[d->anchor] || d->id[d->anchor]!=d->anchor_id ||
 		absi((int)d->x[d->anchor]-d->ax)>c->slop || absi((int)d->y[d->anchor]-d->ay)>c->slop ||
@@ -130,6 +160,10 @@ static void process(const struct device *dev)
 	}
 	if (d->fingers == 0) {
 		reset(d);
+	} else if (d->fingers == 1 && d->previous == 2 && !d->tip_owned && d->anchor_id >= 0) {
+		/* Rejected two-finger time is not stationary one-finger hold time. */
+		d->anchor_stable_since = now;
+		d->ax = d->x[d->anchor]; d->ay = d->y[d->anchor];
 	}
 	d->previous = d->fingers;
 }
@@ -146,8 +180,9 @@ static int tip_tap_init(const struct device *dev)
 }
 
 #define INST(n) \
+	BUILD_ASSERT(DT_INST_PROP(n, anchor_min_hold_ms) >= 0 && DT_INST_PROP(n, anchor_min_hold_ms) <= UINT16_MAX, "anchor hold out of range"); \
 	static struct data data_##n={.anchor_id=-1,.second_id=-1}; \
-	static const struct cfg cfg_##n={.max_ms=DT_INST_PROP_OR(n,second_contact_timeout_ms,180),.slop=DT_INST_PROP_OR(n,contact_slop,75),.separation=DT_INST_PROP_OR(n,minimum_horizontal_separation,160),.invert=DT_INST_PROP_OR(n,direction_inverted,false)}; \
+	static const struct cfg cfg_##n={.max_ms=DT_INST_PROP_OR(n,second_contact_timeout_ms,180),.slop=DT_INST_PROP_OR(n,contact_slop,75),.separation=DT_INST_PROP_OR(n,minimum_horizontal_separation,160),.anchor_min_hold_ms=DT_INST_PROP_OR(n,anchor_min_hold_ms,250),.invert=DT_INST_PROP_OR(n,direction_inverted,false)}; \
 	static void input_##n(struct input_event *e) { struct data *d=&data_##n; if(e->type==INPUT_EV_ABS) { if(e->code==INPUT_ABS_MT_SLOT)d->slot=e->value; else if(e->code==TRAVELERS_PAD_INPUT_ABS_MT_TRACKING_ID && d->slot<TRAVELERS_PAD_MAX_CONTACTS){d->valid[d->slot]=e->value>=0;d->id[d->slot]=e->value;} else if(e->code==TRAVELERS_PAD_INPUT_ABS_MT_POSITION_X && d->slot<TRAVELERS_PAD_MAX_CONTACTS)d->x[d->slot]=e->value; else if(e->code==TRAVELERS_PAD_INPUT_ABS_MT_POSITION_Y && d->slot<TRAVELERS_PAD_MAX_CONTACTS)d->y[d->slot]=e->value; else if(e->code==INPUT_ABS_Z)d->fingers=e->value; else if(e->code==INPUT_ABS_RZ && e->value)d->reset=true;} if(e->sync) { d->arbiter_frame_seq=travelers_pad_arbiter_next_frame(TRAVELERS_PAD_RECOGNIZER_TIP_TAP); process(DEVICE_DT_INST_GET(n)); travelers_pad_arbiter_observed(TRAVELERS_PAD_RECOGNIZER_TIP_TAP,d->arbiter_frame_seq); } } \
 	INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_INST_PHANDLE(n,input_device)),input_##n); \
 	DEVICE_DT_INST_DEFINE(n,tip_tap_init,NULL,&data_##n,&cfg_##n,POST_KERNEL,CONFIG_TRAVELERS_PAD_IQS9150_FUNCTION_INIT_PRIORITY,&api);
