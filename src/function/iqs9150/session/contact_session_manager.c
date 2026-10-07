@@ -23,7 +23,15 @@
 
 LOG_MODULE_REGISTER(travelers_pad_session, LOG_LEVEL_INF);
 
+/* Private unsynchronized wake marker, never a contact frame or owner claim.
+ * 非syncの内部wake marker。接触frame・所有権claimとしては扱わない。 */
+#define SESSION_CONFIRM_WAKE 0x7f01
+
 struct session_data {
+	const struct device *dev;
+	struct k_work_delayable confirm_work;
+	struct k_mutex lock;
+	bool receiving_frame;
 	uint32_t next_session_id;
 	uint32_t next_frame_seq;
 	struct travelers_pad_session_snapshot snapshot;
@@ -41,6 +49,28 @@ struct session_data {
 };
 
 struct session_config { uint16_t extra_contact_confirm_ms; };
+
+static void session_confirm_work(struct k_work *work)
+{
+	struct session_data *data = CONTAINER_OF(k_work_delayable_from_work(work),
+		struct session_data, confirm_work);
+	/* Only enqueue a wake; raw/session fields are accessed in the serialized
+	 * callbacks below. Queue pressure must not silently lose confirmation.
+	 * wakeだけを投入し、raw/session状態は直列化callback内で扱う。 */
+	if (input_report(data->dev, INPUT_EV_MSC, SESSION_CONFIRM_WAKE, 0, false,
+			 K_NO_WAIT) != 0)
+		k_work_reschedule(&data->confirm_work, K_MSEC(1));
+}
+
+static void session_schedule_confirmation(struct session_data *data, uint16_t confirm_ms)
+{
+	if (data->stability.pending) {
+		int64_t remaining = data->stability.pending_since + confirm_ms - k_uptime_get();
+		k_work_reschedule(&data->confirm_work, K_MSEC(MAX(remaining, 1)));
+	} else {
+		k_work_cancel_delayable(&data->confirm_work);
+	}
+}
 
 static void session_process(const struct device *dev)
 {
@@ -92,6 +122,7 @@ static void session_emit_frame(const struct device *dev)
 	}
 	uint8_t mask = travelers_pad_stabilize_contacts(&data->stability, data->raw_mask,
 		k_uptime_get(), cfg->extra_contact_confirm_ms);
+	session_schedule_confirmation(data, cfg->extra_contact_confirm_ms);
 	uint8_t first = data->have_representative && (mask & BIT(data->representative)) ?
 		data->representative : travelers_pad_first_contact(mask);
 	uint8_t second = first < TRAVELERS_PAD_MAX_CONTACTS ?
@@ -140,6 +171,8 @@ static void session_emit_frame(const struct device *dev)
 static void session_input(const struct device *dev, struct input_event *evt)
 {
 	struct session_data *data = dev->data;
+	k_mutex_lock(&data->lock, K_FOREVER);
+	data->receiving_frame = true;
 	if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_MT_SLOT) {
 		data->slot = evt->value;
 	} else if (evt->type == INPUT_EV_ABS && data->slot < TRAVELERS_PAD_MAX_CONTACTS &&
@@ -165,7 +198,40 @@ static void session_input(const struct device *dev, struct input_event *evt)
 	}
 	if (evt->sync) {
 		session_emit_frame(dev);
+		data->receiving_frame = false;
 	}
+	k_mutex_unlock(&data->lock);
+}
+
+static void session_confirm_input(const struct device *dev, struct input_event *evt)
+{
+	if (evt->type != INPUT_EV_MSC || evt->code != SESSION_CONFIRM_WAKE) return;
+	struct session_data *data = dev->data;
+	const struct session_config *cfg = dev->config;
+	k_mutex_lock(&data->lock, K_FOREVER);
+	/* A stale wake after release/reset is harmless. Never confirm a partially
+	 * received physical frame, nor let an old wake mature a new candidate early.
+	 * 解放/reset後の古いwakeは無効。受信途中frameや新候補の早期確定も防ぐ。 */
+	if (data->stability.pending && !data->reset_pending) {
+		if (data->receiving_frame) {
+			k_work_reschedule(&data->confirm_work, K_MSEC(1));
+		} else if (k_uptime_get() - data->stability.pending_since < cfg->extra_contact_confirm_ms) {
+			session_schedule_confirmation(data, cfg->extra_contact_confirm_ms);
+		} else {
+			LOG_INF("contact confirmation deadline reached; emitting complete frame");
+			session_emit_frame(dev);
+		}
+	}
+	k_mutex_unlock(&data->lock);
+}
+
+static int session_init(const struct device *dev)
+{
+	struct session_data *data = dev->data;
+	data->dev = dev;
+	k_mutex_init(&data->lock);
+	k_work_init_delayable(&data->confirm_work, session_confirm_work);
+	return 0;
 }
 
 #define SESSION_INST(n) \
@@ -173,7 +239,9 @@ static void session_input(const struct device *dev, struct input_event *evt)
 	static const struct session_config session_config_##n = { \
 		.extra_contact_confirm_ms = DT_INST_PROP_OR(n, extra_contact_confirm_ms, 35) }; \
 	static void session_input_##n(struct input_event *evt) { session_input(DEVICE_DT_INST_GET(n), evt); } \
+	static void session_confirm_##n(struct input_event *evt) { session_confirm_input(DEVICE_DT_INST_GET(n), evt); } \
 	INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_INST_PHANDLE(n, input_device)), session_input_##n); \
-	DEVICE_DT_INST_DEFINE(n, NULL, NULL, &session_data_##n, &session_config_##n, POST_KERNEL, \
+	INPUT_CALLBACK_DEFINE(DEVICE_DT_INST_GET(n), session_confirm_##n); \
+	DEVICE_DT_INST_DEFINE(n, session_init, NULL, &session_data_##n, &session_config_##n, POST_KERNEL, \
 		CONFIG_TRAVELERS_PAD_IQS9150_FUNCTION_INIT_PRIORITY, NULL);
 DT_INST_FOREACH_STATUS_OKAY(SESSION_INST)
