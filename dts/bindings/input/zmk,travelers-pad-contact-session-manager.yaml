@@ -2,6 +2,15 @@ description: Travelers Pad normalized contact session manager
 compatible: "zmk,travelers-pad-contact-session-manager"
 include: base.yaml
 properties:
+  extra-contact-confirm-ms:
+    type: int
+    default: 35
+    description: |
+      Confirm a second contact added during a one-contact stream for this duration.
+      Initial multi-contact touches and full release are immediate. Zero disables
+      confirmation. Recognizers share the same filtered slot/count frame.
+      継続中の1本指への2本目追加の確認時間。初回多指接触と全解除は即時。
+      0で無効。全認識器は同一の安定化slot/count frameを見る。
   input-device:
     type: phandle
     required: true
