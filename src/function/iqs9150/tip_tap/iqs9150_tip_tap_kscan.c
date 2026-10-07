@@ -72,6 +72,7 @@ static bool claim_tip_tap(struct data *d)
 	 * committed/provisional primary ownerがあれば候補を無効にし、反復action
 	 * のためTIP_TAP自身だけを許可する。 */
 	if (owner != TRAVELERS_PAD_OWNER_NONE && owner != TRAVELERS_PAD_OWNER_TIP_TAP) {
+		LOG_INF("Tip-Tap ignored: competing owner=%u", owner);
 		return false;
 	}
 
@@ -112,6 +113,7 @@ static void process(const struct device *dev)
 	 * pre-existing stationary anchor may arm it. No timer output or claim.
 	 * 通常の2Fタップの接触差をTip-Tapにしない。先に静止したanchorだけを認める。 */
 	if (d->anchor_id >= 0 && (!d->valid[d->anchor] || d->id[d->anchor] != d->anchor_id)) {
+		if (d->candidate) LOG_INF("Tip-Tap ignored: anchor lost or identity changed");
 		d->anchor_id = -1;
 		d->candidate = false;
 	}
@@ -140,8 +142,21 @@ static void process(const struct device *dev)
 		}
 	}
 	if (d->candidate && d->fingers == 2 && (!d->valid[d->anchor] || d->id[d->anchor]!=d->anchor_id ||
+		!d->valid[d->second] || d->id[d->second]!=d->second_id ||
 		absi((int)d->x[d->anchor]-d->ax)>c->slop || absi((int)d->y[d->anchor]-d->ay)>c->slop ||
-		absi((int)d->x[d->second]-d->sx)>c->slop || absi((int)d->y[d->second]-d->sy)>c->slop)) d->candidate=false;
+		absi((int)d->x[d->second]-d->sx)>c->slop || absi((int)d->y[d->second]-d->sy)>c->slop)) {
+		LOG_INF("Tip-Tap ignored: contact changed or movement exceeded slop=%u", c->slop);
+		d->candidate=false;
+	}
+	if (d->candidate && !d->fired && d->previous == 2 && d->fingers == 1) {
+		if (now - d->second_start > c->max_ms) {
+			LOG_INF("Tip-Tap ignored: second contact duration=%lld ms limit=%u ms",
+				(long long)(now - d->second_start), c->max_ms);
+		} else if (absi((int)d->sx - d->ax) < c->separation) {
+			LOG_INF("Tip-Tap ignored: horizontal separation=%u minimum=%u",
+				absi((int)d->sx - d->ax), c->separation);
+		}
+	}
 	if (d->candidate && !d->fired && d->previous == 2 && d->fingers == 1 &&
 	    d->valid[d->anchor] && d->id[d->anchor] == d->anchor_id &&
 	    now - d->second_start <= c->max_ms &&

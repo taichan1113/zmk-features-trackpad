@@ -86,6 +86,15 @@ config TRAVELERS_PAD_CLICK_GAP_MS
     range 5 100
     depends on TRAVELERS_PAD_IQS9150_CONTACT_SESSION
 
+config TRAVELERS_PAD_GESTURE_PRESS_MS
+    int "Discrete gesture virtual key button-down duration (ms)"
+    default 50
+    range 5 100
+    depends on TRAVELERS_PAD_IQS9150_CONTACT_SESSION
+    help
+      Pace multi-finger, Tip-Tap and transform virtual keys asynchronously.
+      Edge dial keeps its existing behavior/macro pacing.
+
 config TRAVELERS_PAD_IQS9150_TIP_TAP
     bool "Travelers Pad two-finger Tip-Tap"
     default y

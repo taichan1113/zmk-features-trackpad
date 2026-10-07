@@ -45,6 +45,7 @@ static struct k_spinlock held_buttons_lock;
 
 static void cancel_clicks(uint16_t button, bool all);
 static bool button_busy(uint16_t button);
+static void cancel_behavior_actions(void);
 
 static bool held_button_matches(const struct held_button_record *record, const struct device *dev,
 				uint32_t ownership_frame_seq,
@@ -278,6 +279,7 @@ static void retry_pending_button_ups(const char *producer)
 void travelers_pad_output_cancel_all(const char *producer)
 {
 	cancel_clicks(0, true);
+	cancel_behavior_actions();
 	for (size_t index = 0; index < ARRAY_SIZE(held_buttons); index++) {
 		k_spinlock_key_t key = k_spin_lock(&held_buttons_lock);
 		if (held_buttons[index].held) {
@@ -550,6 +552,76 @@ int travelers_pad_output_terminal_click(
 	return 0;
 }
 
+#define BEHAVIOR_QUEUE_SIZE 16
+struct paced_behavior {
+	const struct device *dev;
+	kscan_callback_t callback;
+	uint16_t row, column;
+	bool down, cancelled;
+};
+static struct paced_behavior behavior_queue[BEHAVIOR_QUEUE_SIZE];
+static uint8_t behavior_head, behavior_count;
+static int64_t behavior_deadline;
+static struct k_spinlock behavior_lock;
+static void behavior_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(behavior_work, behavior_work_handler);
+
+static void cancel_behavior_actions(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&behavior_lock);
+	for (uint8_t i = 0; i < behavior_count; i++) {
+		behavior_queue[(behavior_head + i) % BEHAVIOR_QUEUE_SIZE].cancelled = true;
+	}
+	behavior_deadline = 0;
+	if (behavior_count != 0) {
+		k_work_reschedule(&behavior_work, K_NO_WAIT);
+	}
+	k_spin_unlock(&behavior_lock, key);
+}
+
+static void behavior_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	k_spinlock_key_t key = k_spin_lock(&behavior_lock);
+	int64_t now = k_uptime_get();
+	if (now < behavior_deadline) {
+		k_work_reschedule(&behavior_work, K_MSEC(behavior_deadline - now));
+		k_spin_unlock(&behavior_lock, key);
+		return;
+	}
+	while (behavior_count != 0 && behavior_queue[behavior_head].cancelled &&
+	       !behavior_queue[behavior_head].down) {
+		behavior_head = (behavior_head + 1) % BEHAVIOR_QUEUE_SIZE;
+		behavior_count--;
+	}
+	if (behavior_count == 0) {
+		k_spin_unlock(&behavior_lock, key);
+		return;
+	}
+	struct paced_behavior action = behavior_queue[behavior_head];
+	bool press = !action.down;
+	/* Never call ZMK callbacks with a spinlock held. Only this work item
+	 * dispatches the accepted transactions; cancel only marks them. */
+	behavior_queue[behavior_head].down = press;
+	k_spin_unlock(&behavior_lock, key);
+	action.callback(action.dev, action.row, action.column, press);
+	key = k_spin_lock(&behavior_lock);
+	bool cancelled = behavior_queue[behavior_head].cancelled;
+	if (!press) {
+		behavior_head = (behavior_head + 1) % BEHAVIOR_QUEUE_SIZE;
+		behavior_count--;
+	}
+	behavior_deadline = k_uptime_get() + (press ? CONFIG_TRAVELERS_PAD_GESTURE_PRESS_MS : 5);
+	if (behavior_count != 0) {
+		k_work_reschedule(&behavior_work, cancelled ? K_NO_WAIT :
+			K_MSEC(press ? CONFIG_TRAVELERS_PAD_GESTURE_PRESS_MS : 5));
+		if (cancelled) behavior_deadline = 0;
+	}
+	k_spin_unlock(&behavior_lock, key);
+	LOG_INF("paced gesture row=%u column=%u pressed=%u t=%lld", action.row,
+		action.column, press, (long long)now);
+}
+
 int travelers_pad_output_behavior_primary(
 	const struct device *dev, kscan_callback_t callback, uint32_t ownership_frame_seq,
 	enum travelers_pad_recognizer_id recognizer, enum travelers_pad_owner owner,
@@ -566,8 +638,25 @@ int travelers_pad_output_behavior_primary(
 		return -EACCES;
 	}
 
-	callback(dev, row, column, true);
-	callback(dev, row, column, false);
+	/* Edge dial already has keyboard-owned macro pacing; do not lengthen it.
+	 * Accepted discrete gestures are bounded transport transactions, not new
+	 * recognizer claims. A release remains owed after contact ownership ends. */
+	if (recognizer == TRAVELERS_PAD_RECOGNIZER_EDGE_DIAL) {
+		callback(dev, row, column, true);
+		callback(dev, row, column, false);
+		return 0;
+	}
+	k_spinlock_key_t key = k_spin_lock(&behavior_lock);
+	if (behavior_count == BEHAVIOR_QUEUE_SIZE) {
+		k_spin_unlock(&behavior_lock, key);
+		LOG_WRN("%s gesture output queue full", producer);
+		return -ENOSPC;
+	}
+	behavior_queue[(behavior_head + behavior_count) % BEHAVIOR_QUEUE_SIZE] =
+		(struct paced_behavior){.dev = dev, .callback = callback, .row = row, .column = column};
+	behavior_count++;
+	k_work_reschedule(&behavior_work, K_MSEC(MAX(1, behavior_deadline - k_uptime_get())));
+	k_spin_unlock(&behavior_lock, key);
 	return 0;
 }
 
