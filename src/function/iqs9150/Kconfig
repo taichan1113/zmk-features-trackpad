@@ -102,6 +102,16 @@ config TRAVELERS_PAD_IQS9150_TIP_TAP
     select INPUT
     select KSCAN
 
+config TRAVELERS_PAD_TIP_TAP_DIAGNOSTICS
+    bool "Trace normalized Tip-Tap transitions and candidates"
+    default n
+    depends on TRAVELERS_PAD_IQS9150_TIP_TAP
+    help
+      Log contact-count transitions, candidate creation, and an active-contact
+      snapshot at most once per second between transitions. This observes the
+      normalized input, not the sensor's analog or pre-normalization state.
+      Disable after testing to reduce serial logging overhead.
+
 config TRAVELERS_PAD_IQS9150_TRANSFORM_GESTURE
     bool "Travelers Pad two-finger transform gesture"
     default y

@@ -30,6 +30,10 @@ struct data {
 	bool candidate, fired, reset, tip_owned, pending_action, pending_left;
 	uint32_t pending_frame_seq;
 	int64_t anchor_stable_since;
+#if CONFIG_TRAVELERS_PAD_TIP_TAP_DIAGNOSTICS
+	int64_t diagnostic_last_ms;
+	uint32_t diagnostic_attempt;
+#endif
 };
 static uint16_t absi(int value) { return value < 0 ? -value : value; }
 static void reset(struct data *d) {
@@ -105,6 +109,26 @@ static bool claim_tip_tap(struct data *d)
 static void process(const struct device *dev)
 {
 	struct data *d=dev->data; const struct cfg *c=dev->config; int64_t now=k_uptime_get();
+#if CONFIG_TRAVELERS_PAD_TIP_TAP_DIAGNOSTICS
+	if (d->fingers != d->previous || d->reset ||
+	    (d->fingers && now - d->diagnostic_last_ms >= 1000)) {
+		LOG_INF("Tip-Tap trace frame=%u attempt=%u contacts=%u->%u candidate=%u fired=%u owned=%u reset=%u anchor-id=%d slot0=(%u,%d,%u,%u) slot1=(%u,%d,%u,%u)",
+			d->arbiter_frame_seq, d->diagnostic_attempt, d->previous, d->fingers,
+			d->candidate, d->fired, d->tip_owned, d->reset, d->anchor_id,
+			d->valid[0], d->id[0], d->x[0], d->y[0],
+			d->valid[1], d->id[1], d->x[1], d->y[1]);
+		d->diagnostic_last_ms = now;
+	}
+	if (d->fingers == 2 && d->previous != 2) {
+		d->diagnostic_attempt++;
+		if (d->previous != 1 || d->anchor_id < 0)
+			LOG_INF("Tip-Tap unarmed attempt=%u: previous=%u anchor-id=%d",
+				d->diagnostic_attempt, d->previous, d->anchor_id);
+	}
+	if (d->candidate && d->previous == 2 && d->fingers != 1 && d->fingers != 2)
+		LOG_INF("Tip-Tap interrupted attempt=%u: contacts=%u (requires 2->1)",
+			d->diagnostic_attempt, d->fingers);
+#endif
 	if (d->reset) { reset(d); d->reset=false; return; }
 	if (d->fingers == 1 && d->previous == 0) {
 		for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i]) { d->anchor=i; d->anchor_id=d->id[i]; d->ax=d->x[i]; d->ay=d->y[i]; d->anchor_stable_since=now; break; }
@@ -139,6 +163,12 @@ static void process(const struct device *dev)
 		d->fired=false;
 		if (anchor_ready) {
 			for (uint8_t i=0;i<TRAVELERS_PAD_MAX_CONTACTS;i++) if (d->valid[i] && i!=d->anchor) { d->second=i; d->second_id=d->id[i]; d->sx=d->x[i]; d->sy=d->y[i]; d->second_start=now; d->candidate=true; break; }
+#if CONFIG_TRAVELERS_PAD_TIP_TAP_DIAGNOSTICS
+			LOG_INF("Tip-Tap candidate attempt=%u armed=%u anchor-slot=%u anchor-id=%d at=(%u,%u) second-slot=%u second-id=%d at=(%u,%u) age=%lld",
+				d->diagnostic_attempt, d->candidate, d->anchor, d->anchor_id,
+				d->ax, d->ay, d->second, d->second_id, d->sx, d->sy,
+				(long long)(now - d->anchor_stable_since));
+#endif
 		}
 	}
 	if (d->candidate && d->fingers == 2 && (!d->valid[d->anchor] || d->id[d->anchor]!=d->anchor_id ||
