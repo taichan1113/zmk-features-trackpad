@@ -71,6 +71,21 @@ config TRAVELERS_PAD_IQS9150_CONTACT_SESSION
       contact arbiterが唯一の所有権authorityであり、primary出力はtokenでgateし、
       observer出力はlive tokenから明示的に委譲する。
 
+config TRAVELERS_PAD_CLICK_PRESS_MS
+    int "Terminal tap click minimum button-down duration (ms)"
+    default 5
+    range 5 100
+    depends on TRAVELERS_PAD_IQS9150_CONTACT_SESSION
+    help
+      Nonblocking terminal-click pacing. This is an input enqueue interval,
+      not a guarantee of the BLE notification interval seen by the host.
+
+config TRAVELERS_PAD_CLICK_GAP_MS
+    int "Terminal tap click minimum button-up interval (ms)"
+    default 5
+    range 5 100
+    depends on TRAVELERS_PAD_IQS9150_CONTACT_SESSION
+
 config TRAVELERS_PAD_IQS9150_TIP_TAP
     bool "Travelers Pad two-finger Tip-Tap"
     default y

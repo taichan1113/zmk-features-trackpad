@@ -43,6 +43,9 @@ struct held_button_record {
 static struct held_button_record held_buttons[TRAVELERS_PAD_OUTPUT_MAX_HELD_BUTTONS];
 static struct k_spinlock held_buttons_lock;
 
+static void cancel_clicks(uint16_t button, bool all);
+static bool button_busy(uint16_t button);
+
 static bool held_button_matches(const struct held_button_record *record, const struct device *dev,
 				uint32_t ownership_frame_seq,
 				enum travelers_pad_recognizer_id recognizer,
@@ -274,6 +277,7 @@ static void retry_pending_button_ups(const char *producer)
 
 void travelers_pad_output_cancel_all(const char *producer)
 {
+	cancel_clicks(0, true);
 	for (size_t index = 0; index < ARRAY_SIZE(held_buttons); index++) {
 		k_spinlock_key_t key = k_spin_lock(&held_buttons_lock);
 		if (held_buttons[index].held) {
@@ -297,6 +301,14 @@ int travelers_pad_output_primary(const struct device *dev, uint32_t ownership_fr
 	if (!travelers_pad_arbiter_begin_primary_output(ownership_frame_seq, recognizer, owner,
 						capability, producer, &guard)) {
 		return -EACCES;
+	}
+	/* A live drag takes precedence over queued tap pulses for that button. */
+	if (capability == TRAVELERS_PAD_CAP_BUTTON && type == INPUT_EV_KEY && value != 0) {
+		cancel_clicks(code, false);
+		if (button_busy(code)) {
+			travelers_pad_arbiter_end_output(&guard);
+			return -EAGAIN;
+		}
 	}
 	if (capability == TRAVELERS_PAD_CAP_BUTTON && type == INPUT_EV_KEY && value != 0 &&
 	    held_button_exists(dev, ownership_frame_seq, recognizer, owner, code)) {
@@ -375,48 +387,166 @@ int travelers_pad_output_terminal(const struct device *dev, uint32_t ownership_f
 	return rc;
 }
 
+/* Accepted terminal actions become bounded broker-owned transactions. The
+ * original grant is consumed once at enqueue; delayed pulses never replay it.
+ * No sleeps or arbiter locks are held across the pacing interval.
+ */
+#define CLICK_QUEUE_SIZE 8
+struct paced_click {
+	const struct device *dev;
+	uint32_t id;
+	enum travelers_pad_recognizer_id recognizer;
+	enum travelers_pad_owner owner;
+	uint16_t button;
+	uint8_t remaining;
+	bool down;
+};
+static struct paced_click click_queue[CLICK_QUEUE_SIZE];
+static uint8_t click_head, queued_clicks;
+static int64_t click_deadline;
+static struct k_spinlock click_lock;
+static void click_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(click_work, click_work_handler);
+
+static bool button_busy(uint16_t button)
+{
+	k_spinlock_key_t key = k_spin_lock(&held_buttons_lock);
+	bool busy = false;
+	for (size_t i = 0; i < ARRAY_SIZE(held_buttons); i++) {
+		busy |= held_buttons[i].held && held_buttons[i].button == button;
+	}
+	k_spin_unlock(&held_buttons_lock, key);
+	return busy;
+}
+
+static int release_click(struct paced_click *click)
+{
+	if (!held_button_exists(click->dev, click->id, click->recognizer,
+				click->owner, click->button)) {
+		return 0;
+	}
+	if (!begin_button_release(click->dev, click->id, click->recognizer,
+				  click->owner, click->button)) {
+		return -EAGAIN;
+	}
+	int rc = input_report(click->dev, INPUT_EV_KEY, click->button, 0, true, K_NO_WAIT);
+	finish_button_release(click->dev, click->id, click->recognizer,
+			      click->owner, click->button, rc == 0);
+	return rc;
+}
+
+static void cancel_clicks(uint16_t button, bool all)
+{
+	k_spinlock_key_t key = k_spin_lock(&click_lock);
+	for (uint8_t i = 0; i < queued_clicks; i++) {
+		struct paced_click *click = &click_queue[(click_head + i) % CLICK_QUEUE_SIZE];
+		if (all || click->button == button) {
+			click->remaining = 0;
+			if (click->down && release_click(click) == 0) {
+				click->down = false;
+			}
+		}
+	}
+	/* Failed button-ups remain in the exact-owner ledger for retry. */
+	k_spin_unlock(&click_lock, key);
+}
+
+static void click_work_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	int emitted_value = -1;
+	uint16_t emitted_button = 0;
+	k_spinlock_key_t key = k_spin_lock(&click_lock);
+	int64_t now = k_uptime_get();
+	if (now < click_deadline) {
+		k_work_reschedule(&click_work, K_MSEC(click_deadline - now));
+		k_spin_unlock(&click_lock, key);
+		return;
+	}
+	while (queued_clicks != 0) {
+		struct paced_click *click = &click_queue[click_head];
+		if (click->down) {
+			if (release_click(click) != 0) {
+				click_deadline = now + CONFIG_TRAVELERS_PAD_CLICK_PRESS_MS;
+				break;
+			}
+			click->down = false;
+			emitted_value = 0;
+			emitted_button = click->button;
+			click_deadline = k_uptime_get() + CONFIG_TRAVELERS_PAD_CLICK_GAP_MS;
+			break;
+		}
+		if (click->remaining == 0) {
+			click_head = (click_head + 1) % CLICK_QUEUE_SIZE;
+			queued_clicks--;
+			continue;
+		}
+		/* Never let a delayed tap press/release disturb a live drag. */
+		if (button_busy(click->button)) {
+			click->remaining = 0;
+			continue;
+		}
+		if (!remember_held_button(click->dev, click->id, click->recognizer,
+					  click->owner, click->button)) {
+			click_deadline = now + CONFIG_TRAVELERS_PAD_CLICK_PRESS_MS;
+			break;
+		}
+		int rc = input_report(click->dev, INPUT_EV_KEY, click->button, 1, true, K_NO_WAIT);
+		if (rc != 0) {
+			(void)take_held_button(click->dev, click->id, click->recognizer,
+					      click->owner, click->button);
+			click_deadline = now + CONFIG_TRAVELERS_PAD_CLICK_PRESS_MS;
+			break;
+		}
+		click->down = true;
+		emitted_value = 1;
+		emitted_button = click->button;
+		click->remaining--;
+		click_deadline = k_uptime_get() + CONFIG_TRAVELERS_PAD_CLICK_PRESS_MS;
+		break;
+	}
+	if (queued_clicks != 0) {
+		k_work_reschedule(&click_work, K_MSEC(MAX(1, click_deadline - now)));
+	}
+	k_spin_unlock(&click_lock, key);
+	if (emitted_value >= 0) {
+		LOG_INF("paced click button=%u value=%d t=%lld", emitted_button,
+			emitted_value, (long long)now);
+	}
+}
+
 int travelers_pad_output_terminal_click(
 	const struct device *dev, struct travelers_pad_terminal_action_grant *grant,
 	enum travelers_pad_recognizer_id recognizer, enum travelers_pad_owner owner,
 	uint16_t button, uint8_t click_count, const char *producer)
 {
-	int rc;
-	uint32_t click_id;
 	struct travelers_pad_arbiter_output_guard guard;
 	retry_pending_button_ups("broker-terminal-click-retry");
 
-	if (click_count == 0 ||
-	    !travelers_pad_arbiter_begin_terminal_action_output(
+	if (click_count == 0 || click_count > 2) {
+		return -EINVAL;
+	}
+	if (!travelers_pad_arbiter_begin_terminal_action_output(
 		grant, recognizer, owner, TRAVELERS_PAD_CAP_BUTTON, producer, &guard)) {
 		return -EACCES;
 	}
-	click_id = grant->grant_generation;
-	for (uint8_t index = 0; index < click_count; index++) {
-		if (!remember_held_button(dev, click_id, recognizer, owner, button)) {
-			travelers_pad_arbiter_end_output(&guard);
-			LOG_ERR("%s terminal click ledger full", producer);
-			return -ENOMEM;
-		}
-		rc = input_report(dev, INPUT_EV_KEY, button, 1, true, K_NO_WAIT);
-		if (rc != 0) {
-			(void)take_held_button(dev, click_id, recognizer, owner, button);
-			travelers_pad_arbiter_end_output(&guard);
-			LOG_ERR("%s output report failed: %d", producer, rc);
-			return rc;
-		}
-		if (!begin_button_release(dev, click_id, recognizer, owner, button)) {
-			travelers_pad_arbiter_end_output(&guard);
-			return -EIO;
-		}
-		rc = input_report(dev, INPUT_EV_KEY, button, 0, true, K_NO_WAIT);
-		finish_button_release(dev, click_id, recognizer, owner, button, rc == 0);
-		if (rc != 0) {
-			travelers_pad_arbiter_end_output(&guard);
-			LOG_ERR("%s output report failed: %d", producer, rc);
-			return rc;
-		}
+	k_spinlock_key_t key = k_spin_lock(&click_lock);
+	if (queued_clicks == CLICK_QUEUE_SIZE) {
+		k_spin_unlock(&click_lock, key);
+		travelers_pad_arbiter_end_output(&guard);
+		return -ENOSPC;
 	}
+	click_queue[(click_head + queued_clicks) % CLICK_QUEUE_SIZE] = (struct paced_click){
+		.dev = dev, .id = grant->grant_generation, .recognizer = recognizer,
+		.owner = owner, .button = button, .remaining = click_count,
+	};
+	queued_clicks++;
+	k_work_reschedule(&click_work, K_MSEC(MAX(1, click_deadline - k_uptime_get())));
+	k_spin_unlock(&click_lock, key);
 	travelers_pad_arbiter_end_output(&guard);
+	LOG_INF("terminal click queued button=%u count=%u press=%dms gap=%dms",
+		button, click_count, CONFIG_TRAVELERS_PAD_CLICK_PRESS_MS,
+		CONFIG_TRAVELERS_PAD_CLICK_GAP_MS);
 	return 0;
 }
 
