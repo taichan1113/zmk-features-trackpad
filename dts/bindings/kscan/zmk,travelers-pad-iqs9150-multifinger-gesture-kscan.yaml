@@ -5,6 +5,9 @@ compatible: "zmk,travelers-pad-iqs9150-multifinger-gesture-kscan"
 include: [kscan.yaml, base.yaml]
 
 properties:
+  four-finger-hold-immediate:
+    type: boolean
+    description: Emit the hold action once when the live-frame arbiter grants ownership, without waiting for finger release. Default absent keeps release-time output.
   four-finger-hold-ms:
     type: int
     default: 0

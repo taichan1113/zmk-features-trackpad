@@ -82,6 +82,11 @@ the sensor surface and finger placement.
 
 ### Stationary four-finger action
 
+`four-finger-hold-immediate` optionally dispatches once through the arbiter
+resolver as soon as the hold is confirmed while contacts remain down. Continued
+holding and release do not repeat the action; a new contact session is required.
+Without this property, the existing release-time behavior remains unchanged.
+
 Set `four-finger-hold-ms` on the multi-finger gesture node to enable an optional
 stationary four-finger action (default: 0, disabled). `four-finger-hold-slop`
 sets the maximum displacement of each contact on either axis (default: 60
@@ -188,6 +193,10 @@ virtual key機能には、キーボード側のKSCAN合成とkey bindingが必�
 センサー面や指の位置に応じて認識閾値の調整が必要な場合があります。
 
 ### 4本指静止による操作
+
+`four-finger-hold-immediate`を指定すると、指を置いたまま成立したframeのarbiter裁定後に
+一度だけ発火します。保持継続・解放では繰り返さず、再操作には新しい接触sessionが必要。
+未指定の場合は従来どおり解放時に発火します。
 
 多指ジェスチャーnodeの`four-finger-hold-ms`で任意の4本指静止操作を有効にします。
 既定値0は無効です。`four-finger-hold-slop`は各指のX/Y変位の許容値で、

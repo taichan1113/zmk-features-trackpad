@@ -36,6 +36,7 @@ struct gesture_config {
 	uint8_t five_finger_stable_frames;
  uint16_t four_finger_hold_ms;
  uint16_t four_finger_hold_slop;
+ bool four_finger_hold_immediate;
 };
 
 struct gesture_data {
@@ -73,6 +74,7 @@ struct gesture_data {
  bool hold_tracking;
  bool hold_cancelled;
  bool hold_confirmed;
+ bool pending_hold_action;
  int64_t hold_started_ms;
  uint16_t hold_x[TRAVELERS_PAD_MAX_CONTACTS];
  uint16_t hold_y[TRAVELERS_PAD_MAX_CONTACTS];
@@ -134,6 +136,16 @@ static void multifinger_resolve_action(void *context,
 	uint16_t column;
 
 	ARG_UNUSED(token);
+	/* Live-frame hold output must wait for the arbiter decision, just like 5F.
+	 * 即時ホールド出力もarbiter裁定後に限定し、同一接触では一度だけ送る。 */
+	if (data->pending_hold_action && data->ownership_frame_seq == ownership_frame_seq) {
+		data->pending_hold_action = false;
+		if (travelers_pad_output_behavior_primary(data->dev, data->callback,
+			ownership_frame_seq, TRAVELERS_PAD_RECOGNIZER_MULTIFINGER_GESTURE,
+			TRAVELERS_PAD_OWNER_MULTI_GESTURE, 2, 2, "multifinger-hold") == 0) {
+			LOG_INF("4F hold action dispatched while contacts remain down");
+		}
+	}
 	if (!data->pending_five_finger_action ||
 	    data->pending_five_finger_frame_seq != ownership_frame_seq) {
 		return;
@@ -330,6 +342,7 @@ static void reset_session(struct gesture_data *data)
 	data->hold_tracking = false;
 	data->hold_cancelled = false;
 	data->hold_confirmed = false;
+	data->pending_hold_action = false;
 	data->previous_fingers = 0;
 	data->max_fingers = 0;
 	data->moved = false;
@@ -344,9 +357,9 @@ static void reset_session(struct gesture_data *data)
 	data->pending_five_finger_frame_seq = 0;
 }
 
-/* Optional stationary 4F action. Claim in a live frame, dispatch only after
- * all contacts lift so the new keymap layer cannot interpret landing fingers.
- * 4本指静止を生frameでclaimし、全指解放後にだけ仮想キーを発行する。 */
+/* Optional stationary 4F action. Default dispatch is after release; immediate
+ * mode queues one live-frame action for the arbiter resolver instead.
+ * 既定は全指解放後。即時設定では生frameの裁定後に一度だけ発行する。 */
 static void process_four_finger_hold(const struct device *dev, int64_t now)
 {
  const struct gesture_config *cfg = dev->config;
@@ -380,7 +393,9 @@ static void process_four_finger_hold(const struct device *dev, int64_t now)
  if (now - data->hold_started_ms >= cfg->four_finger_hold_ms &&
      claim_multifinger_gesture(data, now - data->hold_started_ms)) {
   data->hold_confirmed = true;
-  LOG_INF("4F hold confirmed; action waits for all contacts to lift");
+  data->pending_hold_action = cfg->four_finger_hold_immediate;
+  LOG_INF("4F hold confirmed; action=%s", cfg->four_finger_hold_immediate ?
+          "on arbiter resolution" : "after release");
  }
 }
 
@@ -455,7 +470,7 @@ static void gesture_process_frame(const struct device *dev)
 		}
 	} else if (data->previous_fingers != 0) {
 		if (data->hold_confirmed) {
-   if (travelers_pad_output_behavior_primary(data->dev, data->callback,
+   if (!cfg->four_finger_hold_immediate && travelers_pad_output_behavior_primary(data->dev, data->callback,
        data->ownership_frame_seq, TRAVELERS_PAD_RECOGNIZER_MULTIFINGER_GESTURE,
        TRAVELERS_PAD_OWNER_MULTI_GESTURE, 2, 2, "multifinger-hold") == 0)
     LOG_INF("4F hold action dispatched after release");
@@ -530,6 +545,7 @@ static int gesture_init(const struct device *dev)
 		.five_finger_stable_frames = DT_INST_PROP_OR(n, five_finger_stable_frames, 3),       \
   .four_finger_hold_ms = DT_INST_PROP_OR(n, four_finger_hold_ms, 0), \
   .four_finger_hold_slop = DT_INST_PROP_OR(n, four_finger_hold_slop, 60), \
+  .four_finger_hold_immediate = DT_INST_PROP(n, four_finger_hold_immediate), \
 	};                                                                                           \
 	static void gesture_input_handler_##n(struct input_event *evt)                              \
 	{                                                                                            \
