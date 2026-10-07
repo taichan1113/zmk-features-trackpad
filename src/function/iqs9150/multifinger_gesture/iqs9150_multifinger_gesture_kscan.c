@@ -405,7 +405,12 @@ static void gesture_process_frame(const struct device *dev)
 	struct gesture_data *data = dev->data;
 	int64_t now = k_uptime_get();
 
-	if (data->fingers != 0) {
+	/* Removing a finger changes the centroid without physical movement.
+	 * Freeze the last complete 3F/4F centroid during staggered release.
+	 * 部分解放による重心変化は移動ではない。完全な3F/4F時の重心を保持する。 */
+	bool partial_swipe_release = data->max_fingers >= 3 && data->max_fingers <= 4 &&
+		data->fingers != 0 && data->fingers < data->max_fingers;
+	if (data->fingers != 0 && !partial_swipe_release) {
 		update_contact_centroid(data);
 	}
 	if (data->sensor_reset) {
@@ -429,7 +434,8 @@ static void gesture_process_frame(const struct device *dev)
 		data->max_fingers = MAX(data->max_fingers, data->fingers);
 		/* Simultaneous contacts can arrive 1F, then 2F, then 3F. Rebase before
 		 * movement starts so completing the set never becomes a false swipe. */
-		if (fingers_increased && !data->moved) {
+		if (!data->moved && (fingers_increased ||
+		    (data->fingers == data->max_fingers && data->fingers != data->previous_fingers))) {
 			data->start_x = data->x;
 			data->start_y = data->y;
 		}
@@ -453,7 +459,9 @@ static void gesture_process_frame(const struct device *dev)
 		 * 検出済みのdrag ownerはgestureが競合ownerをproposalすること自体を阻止する。
 		 * 終端出力の抑止とは別にする。proposal生成自体が副作用となるためである。 */
 		process_four_finger_hold(dev, now);
-		if (data->max_fingers >= 3 && !data->moved && !data->hold_confirmed && !data->cancelled_by_drag_owner &&
+		if (data->max_fingers >= 3 && data->fingers == data->max_fingers &&
+		    active_contact_count(data) == data->fingers &&
+		    !data->moved && !data->hold_confirmed && !data->cancelled_by_drag_owner &&
 	    (absolute_int((int)data->x - data->start_x) >= cfg->swipe_min_move ||
 	    absolute_int((int)data->y - data->start_y) >= cfg->swipe_min_move)) {
 			uint32_t move = absolute_int((int)data->x - data->start_x) +
