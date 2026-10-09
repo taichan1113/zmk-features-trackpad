@@ -11,3 +11,6 @@ properties:
   contact-slop: {type: int, default: 75}
   minimum-horizontal-separation: {type: int, default: 160}
   direction-inverted: {type: boolean}
+  anchor-hold:
+    type: boolean
+    description: Hold virtual row 0 column 2 after the first accepted Tip-Tap until anchor loss or cancellation. Assign its modifier separately from left/right keys. Default off.

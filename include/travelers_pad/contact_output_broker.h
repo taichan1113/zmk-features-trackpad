@@ -92,6 +92,16 @@ int travelers_pad_output_behavior_primary(
 	enum travelers_pad_recognizer_id recognizer, enum travelers_pad_owner owner,
 	uint16_t row, uint16_t column, const char *producer);
 
+/* Optional single anchored behavior hold. Start is token-gated; end repays the
+ * matching accepted press after queued discrete actions finish. Cancellation
+ * drops pending actions and releases it. A new hold while draining is rejected.
+ * 任意のanchor保持。開始はtoken認可、終了は既受付action後に対応pressを解放する。 */
+int travelers_pad_output_behavior_hold_start(
+	const struct device *dev, kscan_callback_t callback, uint32_t ownership_frame_seq,
+	enum travelers_pad_recognizer_id recognizer, enum travelers_pad_owner owner,
+	uint16_t row, uint16_t column, const char *producer);
+void travelers_pad_output_behavior_hold_end(const struct device *dev);
+
 /* Canonical pointer output is already selected by the router before it reaches
  * the pointer adapter. It has no independent recognizer claim, but uses the
  * same transport point so every host-facing REL event is centralized.

@@ -80,6 +80,18 @@ Pinch and rotation are separately selectable; rotation is disabled in the
 validated configuration. Their recognition thresholds may require tuning for
 the sensor surface and finger placement.
 
+### Optional Tip-Tap modifier hold
+
+Set `anchor-hold;` on the Tip-Tap node to hold local KSCAN row 0, column 2
+after the first accepted Tip-Tap. Map that position to a modifier independently
+from left/right columns 0/1. For Alt-Tab, use `&kp LALT` for the hold and
+`&kp LS(TAB)` / `&kp TAB` for left/right. Without the property, no held action
+is emitted. Use consistent or transparent bindings across layers for release.
+Anchor loss, reset, cancellation or more than two contacts ends the hold.
+Normal end releases it after queued discrete keys finish; cancellation drops
+pending actions and releases active keys. The bounded broker supports one such
+hold at a time. The held modifier also affects other host key input.
+
 ### Stationary four-finger action
 
 `four-finger-hold-immediate` optionally dispatches once through the arbiter
@@ -191,6 +203,17 @@ virtual key機能には、キーボード側のKSCAN合成とkey bindingが必�
 互換virtual KSCAN sourceとlayoutを用意してください。
 ピンチと回転は個別に選択できます。確認済み構成では回転を無効にしています。
 センサー面や指の位置に応じて認識閾値の調整が必要な場合があります。
+
+### 任意のTip-Tap modifier保持
+
+Tip-Tap nodeに `anchor-hold;` を指定すると、最初の認可済みTip-Tap後にローカル
+KSCAN行0列2を保持します。左右列0/1とは別にmodifierを割り当ててください。
+Alt-Tabなら保持は `&kp LALT`、左右は `&kp LS(TAB)`／`&kp TAB` です。
+未指定なら保持actionは出ません。解放のため、レイヤー間で同じbindingまたは
+透過bindingを使用します。anchor喪失・reset・取消し・3本以上で終了し、通常終了は
+受付済み単発キー完了後に解放します。取消しは未送信actionを破棄して押下済みキーを
+解放します。有限brokerが同時に保持するanchor actionは1件です。
+保持modifierは他のホストキー入力にも作用します。
 
 ### 4本指静止による操作
 

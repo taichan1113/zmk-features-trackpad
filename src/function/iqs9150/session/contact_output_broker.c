@@ -557,12 +557,15 @@ struct paced_behavior {
 	const struct device *dev;
 	kscan_callback_t callback;
 	uint16_t row, column;
-	bool down, cancelled;
+	bool down, cancelled, hold_press;
 };
 static struct paced_behavior behavior_queue[BEHAVIOR_QUEUE_SIZE];
 static uint8_t behavior_head, behavior_count;
 static int64_t behavior_deadline;
 static struct k_spinlock behavior_lock;
+static struct paced_behavior behavior_hold;
+static bool hold_reserved, hold_down, hold_end;
+static uint8_t hold_release_remaining;
 static void behavior_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(behavior_work, behavior_work_handler);
 
@@ -573,7 +576,9 @@ static void cancel_behavior_actions(void)
 		behavior_queue[(behavior_head + i) % BEHAVIOR_QUEUE_SIZE].cancelled = true;
 	}
 	behavior_deadline = 0;
-	if (behavior_count != 0) {
+	hold_end = hold_reserved;
+	hold_release_remaining = 0;
+	if (behavior_count != 0 || hold_reserved) {
 		k_work_reschedule(&behavior_work, K_NO_WAIT);
 	}
 	k_spin_unlock(&behavior_lock, key);
@@ -593,8 +598,20 @@ static void behavior_work_handler(struct k_work *work)
 	       !behavior_queue[behavior_head].down) {
 		behavior_head = (behavior_head + 1) % BEHAVIOR_QUEUE_SIZE;
 		behavior_count--;
+		if (hold_end && hold_release_remaining) hold_release_remaining--;
 	}
-	if (behavior_count == 0) {
+	if (behavior_count == 0 || (hold_reserved && hold_end && !hold_release_remaining &&
+				   !behavior_queue[behavior_head].down)) {
+		if (hold_reserved && hold_end && !hold_release_remaining) {
+			struct paced_behavior held = behavior_hold;
+			bool release = hold_down;
+			/* Keep reservation until the callback is finished. */
+			k_spin_unlock(&behavior_lock, key);
+			if (release) held.callback(held.dev, held.row, held.column, false);
+			key = k_spin_lock(&behavior_lock);
+			hold_reserved = hold_down = hold_end = false;
+			if (behavior_count) k_work_reschedule(&behavior_work, K_MSEC(1));
+		}
 		k_spin_unlock(&behavior_lock, key);
 		return;
 	}
@@ -603,18 +620,21 @@ static void behavior_work_handler(struct k_work *work)
 	/* Never call ZMK callbacks with a spinlock held. Only this work item
 	 * dispatches the accepted transactions; cancel only marks them. */
 	behavior_queue[behavior_head].down = press;
+	if (action.hold_press) hold_down = true;
 	k_spin_unlock(&behavior_lock, key);
 	action.callback(action.dev, action.row, action.column, press);
 	key = k_spin_lock(&behavior_lock);
 	bool cancelled = behavior_queue[behavior_head].cancelled;
-	if (!press) {
+	if (!press || action.hold_press) {
 		behavior_head = (behavior_head + 1) % BEHAVIOR_QUEUE_SIZE;
 		behavior_count--;
+		if (hold_end && hold_release_remaining) hold_release_remaining--;
 	}
-	behavior_deadline = k_uptime_get() + (press ? CONFIG_TRAVELERS_PAD_GESTURE_PRESS_MS : 5);
-	if (behavior_count != 0) {
+	int delay = action.hold_press ? 1 : (press ? CONFIG_TRAVELERS_PAD_GESTURE_PRESS_MS : 5);
+	behavior_deadline = k_uptime_get() + delay;
+	if (behavior_count != 0 || (hold_reserved && hold_end)) {
 		k_work_reschedule(&behavior_work, cancelled ? K_NO_WAIT :
-			K_MSEC(press ? CONFIG_TRAVELERS_PAD_GESTURE_PRESS_MS : 5));
+			K_MSEC(delay));
 		if (cancelled) behavior_deadline = 0;
 	}
 	k_spin_unlock(&behavior_lock, key);
@@ -658,6 +678,41 @@ int travelers_pad_output_behavior_primary(
 	k_work_reschedule(&behavior_work, K_MSEC(MAX(1, behavior_deadline - k_uptime_get())));
 	k_spin_unlock(&behavior_lock, key);
 	return 0;
+}
+
+int travelers_pad_output_behavior_hold_start(
+	const struct device *dev, kscan_callback_t callback, uint32_t ownership_frame_seq,
+	enum travelers_pad_recognizer_id recognizer, enum travelers_pad_owner owner,
+	uint16_t row, uint16_t column, const char *producer)
+{
+	if (!callback) return -ENODEV;
+	if (!travelers_pad_arbiter_authorize_output(ownership_frame_seq, recognizer, owner,
+		TRAVELERS_PAD_CAP_BEHAVIOR_ACTION, producer)) return -EACCES;
+	k_spinlock_key_t key = k_spin_lock(&behavior_lock);
+	if (hold_reserved || behavior_count >= BEHAVIOR_QUEUE_SIZE - 1) {
+		k_spin_unlock(&behavior_lock, key);
+		return -ENOSPC;
+	}
+	behavior_hold = (struct paced_behavior){.dev=dev,.callback=callback,.row=row,
+		.column=column,.hold_press=true};
+	hold_reserved=true;hold_down=hold_end=false;
+	hold_release_remaining=0;
+	behavior_queue[(behavior_head + behavior_count) % BEHAVIOR_QUEUE_SIZE] = behavior_hold;
+	behavior_count++;
+	k_work_reschedule(&behavior_work, K_MSEC(MAX(1, behavior_deadline-k_uptime_get())));
+	k_spin_unlock(&behavior_lock, key);
+	return 0;
+}
+
+void travelers_pad_output_behavior_hold_end(const struct device *dev)
+{
+	k_spinlock_key_t key = k_spin_lock(&behavior_lock);
+	if (hold_reserved && behavior_hold.dev == dev && !hold_end) {
+		hold_end=true;
+		hold_release_remaining=behavior_count;
+		k_work_reschedule(&behavior_work, K_MSEC(MAX(1, behavior_deadline-k_uptime_get())));
+	}
+	k_spin_unlock(&behavior_lock, key);
 }
 
 int travelers_pad_output_routed_pointer(const struct device *dev, uint32_t routed_frame_seq,
